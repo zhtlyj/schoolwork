@@ -2,6 +2,9 @@ import { NextResponse } from 'next/server'
 import connectDB from '@/lib/mongodb'
 import Warning from '@/models/Warning'
 import User from '@/models/User'
+import Grade from '@/models/Grade'
+import Attendance from '@/models/Attendance'
+import OperationLog from '@/models/OperationLog'
 import { verifyToken } from '@/lib/jwt'
 
 export async function OPTIONS() {
@@ -24,6 +27,7 @@ export async function GET(request: Request) {
     const studentId = searchParams.get('studentId')
     const type = searchParams.get('type')
     const level = searchParams.get('level')
+    const course = searchParams.get('course') // 课程/学期，成绩预警按课程、学分预警按学期
     const page = parseInt(searchParams.get('page') || '1')
     const limit = parseInt(searchParams.get('limit') || '10')
 
@@ -54,14 +58,110 @@ export async function GET(request: Request) {
       query.level = level
     }
 
+    if (course) {
+      query.course = course
+    }
+
     // 计算跳过的记录数
     const skip = (page - 1) * limit
 
     // 查询预警列表
-    const warnings = await Warning.find(query)
+    const warningsRaw = await Warning.find(query)
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit)
+      .lean()
+
+    // 成绩预警：补充分数、考勤次数（从 Grade、Attendance 查询）
+    const gradeWarnings = warningsRaw.filter((w: any) => w.type === 'grade')
+    const creditSemesterWarnings = warningsRaw.filter((w: any) => w.type === 'credit_semester')
+    const creditTotalWarnings = warningsRaw.filter((w: any) => w.type === 'credit_total')
+    const gradeMap = new Map<string, { score: number; term: string }>()
+    const attendanceMap = new Map<string, number>()
+    const semesterEarnedCreditsMap = new Map<string, number>()
+    const totalEarnedCreditsMap = new Map<string, number>()
+    if (gradeWarnings.length > 0) {
+      const grades = await Grade.find({
+        studentId: { $in: [...new Set(gradeWarnings.map((w: any) => w.studentId))] },
+        course: { $in: [...new Set(gradeWarnings.map((w: any) => w.course))] },
+      }).lean()
+      for (const g of grades as any[]) {
+        const key = `${g.studentId}::${g.course}`
+        const existing = gradeMap.get(key)
+        if (!existing || g.score < existing.score) gradeMap.set(key, { score: g.score, term: g.term })
+      }
+      const attendances = await Attendance.find({
+        studentId: { $in: [...new Set(gradeWarnings.map((w: any) => w.studentId))] },
+        course: { $in: [...new Set(gradeWarnings.map((w: any) => w.course))] },
+      }).lean()
+      for (const a of attendances as any[]) {
+        attendanceMap.set(`${a.studentId}::${a.course}`, a.absentCount)
+      }
+    }
+    if (creditSemesterWarnings.length > 0) {
+      const allGrades = await Grade.find({
+        studentId: { $in: [...new Set(creditSemesterWarnings.map((w: any) => w.studentId))] },
+      }).lean()
+      const bestByKey = new Map<string, { score: number; credits: number }>()
+      for (const g of allGrades as any[]) {
+        const key = `${g.studentId}::${g.course}::${g.term}`
+        const credits = g.credits ?? 2
+        const existing = bestByKey.get(key)
+        if (!existing || g.score > existing.score) bestByKey.set(key, { score: g.score, credits })
+      }
+      const termCreditsByStudent = new Map<string, number>()
+      for (const [key, { score, credits }] of bestByKey) {
+        if (score < 60) continue
+        const [sid, , term] = key.split('::')
+        const mapKey = `${sid}::${term}`
+        termCreditsByStudent.set(mapKey, (termCreditsByStudent.get(mapKey) || 0) + credits)
+      }
+      for (const w of creditSemesterWarnings) {
+        const mapKey = `${w.studentId}::${w.course}`
+        semesterEarnedCreditsMap.set(mapKey, termCreditsByStudent.get(mapKey) ?? 0)
+      }
+    }
+    if (creditTotalWarnings.length > 0) {
+      const allGrades = await Grade.find({
+        studentId: { $in: [...new Set(creditTotalWarnings.map((w: any) => w.studentId))] },
+      }).lean()
+      const bestByKey = new Map<string, { score: number; credits: number }>()
+      for (const g of allGrades as any[]) {
+        const key = `${g.studentId}::${g.course}::${g.term}`
+        const credits = g.credits ?? 2
+        const existing = bestByKey.get(key)
+        if (!existing || g.score > existing.score) bestByKey.set(key, { score: g.score, credits })
+      }
+      const totalByStudent = new Map<string, number>()
+      for (const [key, { score, credits }] of bestByKey) {
+        if (score < 60) continue
+        const [sid] = key.split('::')
+        totalByStudent.set(sid, (totalByStudent.get(sid) || 0) + credits)
+      }
+      for (const w of creditTotalWarnings) {
+        totalEarnedCreditsMap.set(w.studentId, totalByStudent.get(w.studentId) ?? 0)
+      }
+    }
+    const warnings = warningsRaw.map((w: any) => {
+      const out = { ...w }
+      if (w.type === 'grade') {
+        const key = `${w.studentId}::${w.course}`
+        const g = gradeMap.get(key)
+        const a = attendanceMap.get(key)
+        out.score = g?.score ?? null
+        out.absentCount = a ?? null
+        out.term = g?.term ?? null
+      } else if (w.type === 'credit_semester') {
+        out.term = w.course
+        out.earnedCredits = semesterEarnedCreditsMap.get(`${w.studentId}::${w.course}`) ?? null
+      } else if (w.type === 'credit_total') {
+        out.term = w.course
+        out.earnedCredits = totalEarnedCreditsMap.get(w.studentId) ?? null
+      } else {
+        out.term = w.course
+      }
+      return out
+    })
 
     // 获取总数
     const total = await Warning.countDocuments(query)
@@ -140,6 +240,16 @@ export async function POST(request: Request) {
       createdBy: creator._id.toString(),
       createdByName: creator.name,
       blockHash,
+    })
+
+    const typeText = type === 'grade' ? '成绩' : type === 'credit_semester' ? '学期学分' : '总学分'
+    await OperationLog.create({
+      operatorId: creator._id.toString(),
+      operatorName: creator.name,
+      action: 'create',
+      targetType: 'warning',
+      targetId: warning._id.toString(),
+      details: `${creator.name}对${student.name}下发${typeText}预警`,
     })
 
     return NextResponse.json(

@@ -97,7 +97,7 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json()
-    const { studentId, course, score, examType, term } = body
+    const { studentId, course, score, credits, examType, term } = body
 
     if (!studentId || !course || typeof score !== 'number' || !examType || !term) {
       return NextResponse.json(
@@ -116,6 +116,7 @@ export async function POST(request: Request) {
       studentName: student.name,
       course,
       score,
+      credits: typeof credits === 'number' ? credits : 2,
       examType,
       term,
     })

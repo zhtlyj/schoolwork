@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { studentService, Student, CreateStudentData, UpdateStudentData } from '../services/students'
+import { warningService } from '../services/warnings'
 
 export default function StudentManagement() {
   const [students, setStudents] = useState<Student[]>([])
@@ -20,6 +21,25 @@ export default function StudentManagement() {
   })
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
+  const [warningCountByStudent, setWarningCountByStudent] = useState<Record<string, { total: number; high: number; medium: number; low: number }>>({})
+
+  // 获取预警数据（按学生统计）
+  const fetchWarningCounts = async () => {
+    try {
+      const res = await warningService.getWarnings({ page: 1, limit: 500 })
+      const map: Record<string, { total: number; high: number; medium: number; low: number }> = {}
+      for (const w of res.warnings) {
+        if (!map[w.studentId]) map[w.studentId] = { total: 0, high: 0, medium: 0, low: 0 }
+        map[w.studentId].total++
+        if (w.level === 'high') map[w.studentId].high++
+        else if (w.level === 'medium') map[w.studentId].medium++
+        else map[w.studentId].low++
+      }
+      setWarningCountByStudent(map)
+    } catch {
+      setWarningCountByStudent({})
+    }
+  }
 
   // 获取学生列表
   const fetchStudents = async () => {
@@ -43,6 +63,10 @@ export default function StudentManagement() {
     fetchStudents()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, search])
+
+  useEffect(() => {
+    fetchWarningCounts()
+  }, [])
 
   // 处理搜索
   const handleSearch = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -96,6 +120,7 @@ export default function StudentManagement() {
       setSuccess('添加学生成功')
       setShowAddModal(false)
       fetchStudents()
+      fetchWarningCounts()
     } catch (err: any) {
       setError(err.response?.data?.message || '添加学生失败')
     }
@@ -140,6 +165,7 @@ export default function StudentManagement() {
       setSuccess('删除学生成功')
       setShowDeleteModal(false)
       fetchStudents()
+      fetchWarningCounts()
     } catch (err: any) {
       setError(err.response?.data?.message || '删除学生失败')
     }
@@ -161,7 +187,7 @@ export default function StudentManagement() {
         <div className="search-box">
           <input
             type="text"
-            placeholder="搜索学生（姓名、用户名、邮箱、学号）"
+            placeholder="搜索学生（姓名、邮箱、学号）"
             value={search}
             onChange={handleSearch}
             className="search-input"
@@ -185,19 +211,33 @@ export default function StudentManagement() {
                 <tr>
                   <th>学号</th>
                   <th>姓名</th>
-                  <th>用户名</th>
                   <th>邮箱</th>
+                  <th>预警情况</th>
                   <th>注册时间</th>
                   <th>操作</th>
                 </tr>
               </thead>
               <tbody>
-                {students.map((student) => (
+                {students.map((student) => {
+                  const wc = warningCountByStudent[student.id]
+                  const parts: string[] = []
+                  if (wc && wc.total > 0) {
+                    parts.push(`${wc.total} 条`)
+                    if (wc.high > 0) parts.push(`高危 ${wc.high}`)
+                    if (wc.medium > 0) parts.push(`中危 ${wc.medium}`)
+                    if (wc.low > 0) parts.push(`低危 ${wc.low}`)
+                  }
+                  const warningText = parts.length === 0 ? '无' : parts.join(' / ')
+                  return (
                   <tr key={student.id}>
                     <td>{student.studentId}</td>
                     <td>{student.name}</td>
-                    <td>{student.username}</td>
                     <td>{student.email}</td>
+                    <td>
+                      <span className={wc && wc.total > 0 ? (wc.high > 0 ? 'warning-badge high' : wc.medium > 0 ? 'warning-badge medium' : 'warning-badge low') : 'warning-badge none'}>
+                        {warningText}
+                      </span>
+                    </td>
                     <td>{new Date(student.createdAt).toLocaleDateString()}</td>
                     <td>
                       <div className="action-buttons">
@@ -216,7 +256,7 @@ export default function StudentManagement() {
                       </div>
                     </td>
                   </tr>
-                ))}
+                )})}
               </tbody>
             </table>
           </div>

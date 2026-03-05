@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server'
 import connectDB from '@/lib/mongodb'
 import Warning from '@/models/Warning'
+import User from '@/models/User'
+import OperationLog from '@/models/OperationLog'
 import { verifyToken } from '@/lib/jwt'
 
 export async function OPTIONS() {
@@ -107,6 +109,18 @@ export async function PUT(
 
     await warning.save()
 
+    const operator = await User.findById(decoded.userId)
+    if (operator) {
+      await OperationLog.create({
+        operatorId: operator._id.toString(),
+        operatorName: operator.name,
+        action: 'update',
+        targetType: 'warning',
+        targetId: params.id,
+        details: `${operator.name}更新了${warning.studentName}的预警信息`,
+      })
+    }
+
     return NextResponse.json({
       message: '更新预警信息成功',
       warning,
@@ -146,7 +160,19 @@ export async function DELETE(
       return NextResponse.json({ message: '无权限：仅教职工/管理员可删除预警' }, { status: 403 })
     }
 
+    const operator = await User.findById(decoded.userId)
     await Warning.deleteOne({ _id: params.id })
+
+    if (operator) {
+      await OperationLog.create({
+        operatorId: operator._id.toString(),
+        operatorName: operator.name,
+        action: 'delete',
+        targetType: 'warning',
+        targetId: params.id,
+        details: `${operator.name}取消了对${warning.studentName}的预警`,
+      })
+    }
 
     return NextResponse.json({ message: '删除预警成功' })
   } catch (error) {

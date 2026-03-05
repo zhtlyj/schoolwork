@@ -73,9 +73,10 @@ export async function PUT(
     }
 
     const body = await request.json()
-    const { course, score, examType, term } = body as {
+    const { course, score, credits, examType, term } = body as {
       course?: string
       score?: number
+      credits?: number
       examType?: string
       term?: string
     }
@@ -87,6 +88,7 @@ export async function PUT(
 
     if (course) grade.course = course
     if (typeof score === 'number') grade.score = score
+    if (typeof credits === 'number') grade.credits = credits
     if (examType) grade.examType = examType as any
     if (term) grade.term = term
 

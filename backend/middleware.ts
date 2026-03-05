@@ -22,10 +22,13 @@ export function middleware(request: NextRequest) {
   // 允许的源（开发环境）
   const allowedOrigins = [
     'http://localhost:5173',
+    'http://localhost:5174',  // Vite 备用端口
     'http://localhost:3000',
   ]
 
-  if (origin && allowedOrigins.includes(origin)) {
+  // 开发环境：允许任意 localhost 端口
+  const isLocalhost = origin && /^https?:\/\/localhost(:\d+)?$/.test(origin)
+  if (origin && (allowedOrigins.includes(origin) || isLocalhost)) {
     response.headers.set('Access-Control-Allow-Credentials', 'true')
     response.headers.set('Access-Control-Allow-Origin', origin)
     response.headers.set('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT')

@@ -48,8 +48,8 @@ export async function GET(request: Request) {
       total: warnings.length,
       byType: {
         grade: warnings.filter((w) => w.type === 'grade').length,
-        attendance: warnings.filter((w) => w.type === 'attendance').length,
-        assignment: warnings.filter((w) => w.type === 'assignment').length,
+        credit_semester: warnings.filter((w) => w.type === 'credit_semester').length,
+        credit_total: warnings.filter((w) => w.type === 'credit_total').length,
       },
       byLevel: {
         high: warnings.filter((w) => w.level === 'high').length,
@@ -90,24 +90,33 @@ export async function GET(request: Request) {
     })
 
     // 学生统计
+    const withWarningsCount = new Set(warnings.map((w) => w.studentId)).size
     const studentStats = {
       total: students.length,
-      withWarnings: new Set(warnings.map((w) => w.studentId)).size,
+      withWarnings: withWarningsCount,
       withInterventions: new Set(interventions.map((i) => i.studentId)).size,
       withBoth: new Set(
         warnings
           .map((w) => w.studentId)
           .filter((id) => interventions.some((i) => i.studentId === id))
       ).size,
+      withoutWarnings: students.length - withWarningsCount,
     }
 
     // 成绩统计
+    const below60Count = grades.filter((g) => g.score < 60).length
+    const above60Count = grades.filter((g) => g.score >= 60).length
+    const courses = [...new Set(grades.map((g) => g.course))]
+    const terms = [...new Set(grades.map((g) => g.term))]
     const gradeStats = {
       total: grades.length,
       average: grades.length > 0 ? grades.reduce((sum, g) => sum + g.score, 0) / grades.length : 0,
-      below60: grades.filter((g) => g.score < 60).length,
-      below60Percent:
-        grades.length > 0 ? (grades.filter((g) => g.score < 60).length / grades.length) * 100 : 0,
+      below60: below60Count,
+      below60Percent: grades.length > 0 ? (below60Count / grades.length) * 100 : 0,
+      above60: above60Count,
+      passRate: grades.length > 0 ? (above60Count / grades.length) * 100 : 0,
+      courseCount: courses.length,
+      termCount: terms.length,
     }
 
     // 出勤统计

@@ -4,7 +4,7 @@ import { useAuth } from '../contexts/AuthContext'
 import './Auth.css'
 
 export default function Login() {
-  const [username, setUsername] = useState('')
+  const [userId, setUserId] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -17,7 +17,7 @@ export default function Login() {
     setLoading(true)
 
     try {
-      await login({ username, password })
+      await login({ userId, password })
       navigate('/')
     } catch (err: any) {
       setError(err.response?.data?.message || '登录失败，请重试')
@@ -32,14 +32,14 @@ export default function Login() {
         <h1>登录</h1>
         <form onSubmit={handleSubmit}>
           <div className="form-group">
-            <label htmlFor="username">用户名</label>
+            <label htmlFor="userId">学号 / 工号</label>
             <input
               type="text"
-              id="username"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
+              id="userId"
+              value={userId}
+              onChange={(e) => setUserId(e.target.value)}
               required
-              placeholder="请输入用户名"
+              placeholder="请输入学号或工号"
             />
           </div>
           <div className="form-group">

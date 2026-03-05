@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import connectDB from '@/lib/mongodb'
 import Intervention from '@/models/Intervention'
 import User from '@/models/User'
+import OperationLog from '@/models/OperationLog'
 import { verifyToken } from '@/lib/jwt'
 
 export async function OPTIONS() {
@@ -165,7 +166,19 @@ export async function DELETE(request: Request, { params }: { params: { id: strin
       return NextResponse.json({ message: '干预不存在' }, { status: 404 })
     }
 
+    const operator = await User.findById(decoded.userId)
     await Intervention.findByIdAndDelete(id)
+
+    if (operator) {
+      await OperationLog.create({
+        operatorId: operator._id.toString(),
+        operatorName: operator.name,
+        action: 'delete',
+        targetType: 'intervention',
+        targetId: id,
+        details: `${operator.name}删除了${intervention.studentName}的干预记录`,
+      })
+    }
 
     return NextResponse.json({ message: '删除干预成功' })
   } catch (error) {

@@ -2,7 +2,6 @@ import { NextResponse } from 'next/server'
 import connectDB from '@/lib/mongodb'
 import User from '@/models/User'
 import Grade from '@/models/Grade'
-import Attendance from '@/models/Attendance'
 import { verifyToken } from '@/lib/jwt'
 
 export async function OPTIONS() {
@@ -22,9 +21,16 @@ export async function GET(request: Request) {
     await connectDB()
 
     const { searchParams } = new URL(request.url)
-    const type = searchParams.get('type') // 'grade' | 'attendance' | '' (全部)
-    const gradeThreshold = parseFloat(searchParams.get('gradeThreshold') || '60')
-    const attendanceThreshold = parseFloat(searchParams.get('attendanceThreshold') || '3')
+    const type = searchParams.get('type') // 'grade' | 'credit_semester' | 'credit_total' | '' (全部)
+    const gradeHigh = parseFloat(searchParams.get('gradeHigh') || '50')
+    const gradeMedium = parseFloat(searchParams.get('gradeMedium') || '60')
+    const gradeLow = parseFloat(searchParams.get('gradeLow') || '70')
+    const semesterHigh = parseFloat(searchParams.get('semesterHigh') || '5')
+    const semesterMedium = parseFloat(searchParams.get('semesterMedium') || '10')
+    const semesterLow = parseFloat(searchParams.get('semesterLow') || '15')
+    const totalHigh = parseFloat(searchParams.get('totalHigh') || '10')
+    const totalMedium = parseFloat(searchParams.get('totalMedium') || '20')
+    const totalLow = parseFloat(searchParams.get('totalLow') || '30')
 
     // 鉴权：仅 staff/admin 可访问
     const authHeader = request.headers.get('authorization') || ''
@@ -40,11 +46,7 @@ export async function GET(request: Request) {
     // 获取所有学生
     const students = await User.find({ role: 'student' }).select('_id name studentId')
 
-    // 获取所有成绩和出勤数据
-    const [allGrades, allAttendance] = await Promise.all([
-      Grade.find({}).sort({ createdAt: -1 }),
-      Attendance.find({}).sort({ createdAt: -1 }),
-    ])
+    const allGrades = await Grade.find({}).sort({ createdAt: -1 })
 
     // 按学生维度汇总预警项
     const candidateMap = new Map<string, {
@@ -58,64 +60,119 @@ export async function GET(request: Request) {
         term: string
         level: 'high' | 'medium' | 'low'
       }>
-      attendanceWarnings: Array<{
-        course: string
-        absentCount: number
-        lastAbsentAt: string
+      creditWarnings: Array<{
+        scope: 'semester' | 'total'
+        term?: string
+        earnedCredits: number
+        threshold: number
         level: 'high' | 'medium' | 'low'
       }>
     }>()
 
-    // 处理成绩预警
+    // 处理成绩预警：score < gradeHigh 高危，gradeHigh<=score<gradeMedium 中危，gradeMedium<=score<gradeLow 低危
     if (!type || type === 'grade') {
       for (const grade of allGrades) {
-        if (grade.score < gradeThreshold) {
-          const studentId = grade.studentId.toString()
-          if (!candidateMap.has(studentId)) {
-            const student = students.find((s) => s._id.toString() === studentId)
-            if (!student) continue
-            candidateMap.set(studentId, {
-              studentId,
-              studentName: student.name,
-              studentIdNumber: student.studentId || '',
-              gradeWarnings: [],
-              attendanceWarnings: [],
-            })
-          }
-          const candidate = candidateMap.get(studentId)!
-          candidate.gradeWarnings.push({
-            course: grade.course,
-            score: grade.score,
-            examType: grade.examType,
-            term: grade.term,
-            level: 'high', // 成绩低于阈值 = 高危
+        const score = grade.score
+        if (score >= gradeLow) continue
+        const level: 'high' | 'medium' | 'low' = score < gradeHigh ? 'high' : score < gradeMedium ? 'medium' : 'low'
+        const studentId = grade.studentId.toString()
+        if (!candidateMap.has(studentId)) {
+          const student = students.find((s) => s._id.toString() === studentId)
+          if (!student) continue
+          candidateMap.set(studentId, {
+            studentId,
+            studentName: student.name,
+            studentIdNumber: student.studentId || '',
+            gradeWarnings: [],
+            creditWarnings: [],
           })
         }
+        const candidate = candidateMap.get(studentId)!
+        candidate.gradeWarnings.push({
+          course: grade.course,
+          score: grade.score,
+          examType: grade.examType,
+          term: grade.term,
+          level,
+        })
       }
     }
 
-    // 处理出勤预警
-    if (!type || type === 'attendance') {
-      for (const attendance of allAttendance) {
-        if (attendance.absentCount > attendanceThreshold) {
-          const studentId = attendance.studentId.toString()
-          if (!candidateMap.has(studentId)) {
-            const student = students.find((s) => s._id.toString() === studentId)
-            if (!student) continue
-            candidateMap.set(studentId, {
-              studentId,
+    // 处理学分预警：按 (studentId, course, term) 取最高分，及格(>=60)则获得学分
+    if (!type || type === 'credit_semester' || type === 'credit_total') {
+      const creditByStudent = new Map<string, { termCredits: Map<string, number>; totalCredits: number }>()
+      for (const student of students) {
+        creditByStudent.set(student._id.toString(), {
+          termCredits: new Map(),
+          totalCredits: 0,
+        })
+      }
+      // 按 (studentId, course, term) 分组，取最高分
+      const bestScoreByCourse = new Map<string, { score: number; credits: number; studentId: string; term: string }>()
+      for (const grade of allGrades) {
+        const key = `${grade.studentId}::${grade.course}::${grade.term}`
+        const credits = grade.credits ?? 2
+        const existing = bestScoreByCourse.get(key)
+        if (!existing || grade.score > existing.score) {
+          bestScoreByCourse.set(key, {
+            score: grade.score,
+            credits,
+            studentId: grade.studentId.toString(),
+            term: grade.term,
+          })
+        }
+      }
+      for (const [, { score, credits, studentId, term }] of bestScoreByCourse) {
+        if (score < 60) continue
+        const studentCredit = creditByStudent.get(studentId)
+        if (!studentCredit) continue
+        const termCredits = (studentCredit.termCredits.get(term) || 0) + credits
+        studentCredit.termCredits.set(term, termCredits)
+        studentCredit.totalCredits += credits
+      }
+      for (const student of students) {
+        const sid = student._id.toString()
+        const data = creditByStudent.get(sid)
+        if (!data) continue
+        for (const [term, earned] of data.termCredits) {
+          if (earned < semesterLow && (!type || type === 'credit_semester')) {
+            const level: 'high' | 'medium' | 'low' = earned < semesterHigh ? 'high' : earned < semesterMedium ? 'medium' : 'low'
+            const threshold = level === 'high' ? semesterHigh : level === 'medium' ? semesterMedium : semesterLow
+            if (!candidateMap.has(sid)) {
+              candidateMap.set(sid, {
+                studentId: sid,
+                studentName: student.name,
+                studentIdNumber: student.studentId || '',
+                gradeWarnings: [],
+                creditWarnings: [],
+              })
+            }
+            candidateMap.get(sid)!.creditWarnings.push({
+              scope: 'semester',
+              term,
+              earnedCredits: earned,
+              threshold,
+              level,
+            })
+          }
+        }
+        if (data.totalCredits < totalLow && (!type || type === 'credit_total')) {
+          const level: 'high' | 'medium' | 'low' = data.totalCredits < totalHigh ? 'high' : data.totalCredits < totalMedium ? 'medium' : 'low'
+          const threshold = level === 'high' ? totalHigh : level === 'medium' ? totalMedium : totalLow
+          if (!candidateMap.has(sid)) {
+            candidateMap.set(sid, {
+              studentId: sid,
               studentName: student.name,
               studentIdNumber: student.studentId || '',
               gradeWarnings: [],
-              attendanceWarnings: [],
+              creditWarnings: [],
             })
           }
-          const candidate = candidateMap.get(studentId)!
-          candidate.attendanceWarnings.push({
-            course: attendance.course,
-            absentCount: attendance.absentCount,
-            lastAbsentAt: attendance.lastAbsentAt.toISOString(),
-            level: 'medium', // 缺勤超过阈值 = 中危
+          candidateMap.get(sid)!.creditWarnings.push({
+            scope: 'total',
+            earnedCredits: data.totalCredits,
+            threshold,
+            level,
           })
         }
       }
@@ -123,7 +180,7 @@ export async function GET(request: Request) {
 
     // 转换为数组，只返回有预警项的学生
     const candidates = Array.from(candidateMap.values()).filter(
-      (c) => c.gradeWarnings.length > 0 || c.attendanceWarnings.length > 0
+      (c) => c.gradeWarnings.length > 0 || c.creditWarnings.length > 0
     )
 
     return NextResponse.json({

@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server'
 import connectDB from '@/lib/mongodb'
 import User from '@/models/User'
+import OperationLog from '@/models/OperationLog'
+import { verifyToken } from '@/lib/jwt'
 
 export async function OPTIONS() {
   return new NextResponse(null, {
@@ -43,13 +45,23 @@ export async function GET(
   }
 }
 
-// 更新学生信息
+// 更新学生信息（仅 staff/admin）
 export async function PUT(
   request: Request,
   { params }: { params: { id: string } }
 ) {
   try {
     await connectDB()
+
+    const authHeader = request.headers.get('authorization') || ''
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : ''
+    if (!token) {
+      return NextResponse.json({ message: '未提供认证 token' }, { status: 401 })
+    }
+    const decoded = verifyToken(token)
+    if (decoded.role !== 'staff' && decoded.role !== 'admin') {
+      return NextResponse.json({ message: '无权限：仅教职工/管理员可修改学生' }, { status: 403 })
+    }
 
     const body = await request.json()
     const { username, email, studentId, name, password } = body
@@ -116,13 +128,23 @@ export async function PUT(
   }
 }
 
-// 删除学生
+// 删除学生（仅 staff/admin）
 export async function DELETE(
   request: Request,
   { params }: { params: { id: string } }
 ) {
   try {
     await connectDB()
+
+    const authHeader = request.headers.get('authorization') || ''
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : ''
+    if (!token) {
+      return NextResponse.json({ message: '未提供认证 token' }, { status: 401 })
+    }
+    const decoded = verifyToken(token)
+    if (decoded.role !== 'staff' && decoded.role !== 'admin') {
+      return NextResponse.json({ message: '无权限：仅教职工/管理员可删除学生' }, { status: 403 })
+    }
 
     const student = await User.findOne({
       _id: params.id,
@@ -133,7 +155,19 @@ export async function DELETE(
       return NextResponse.json({ message: '学生不存在' }, { status: 404 })
     }
 
+    const operator = await User.findById(decoded.userId)
     await User.deleteOne({ _id: params.id })
+
+    if (operator) {
+      await OperationLog.create({
+        operatorId: operator._id.toString(),
+        operatorName: operator.name,
+        action: 'delete',
+        targetType: 'student',
+        targetId: params.id,
+        details: `${operator.name}删除了学生${student.name}（${student.studentId}）`,
+      })
+    }
 
     return NextResponse.json({ message: '删除学生成功' })
   } catch (error) {

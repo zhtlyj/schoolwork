@@ -1,6 +1,6 @@
 import api from './api'
 
-export type WarningType = 'grade' | 'attendance' | 'assignment'
+export type WarningType = 'grade' | 'credit_semester' | 'credit_total'
 export type WarningLevel = 'low' | 'medium' | 'high'
 
 export interface Warning {
@@ -17,6 +17,14 @@ export interface Warning {
   isRead: boolean
   createdAt: string
   updatedAt: string
+  /** 成绩预警时：该课程最低分数（后端补充） */
+  score?: number | null
+  /** 成绩预警时：该课程考勤缺勤次数（后端补充） */
+  absentCount?: number | null
+  /** 学期时间（成绩预警从 Grade 取 term，学分预警为 course） */
+  term?: string | null
+  /** 学期学分预警时：该学期已获得学分（后端补充） */
+  earnedCredits?: number | null
 }
 
 export interface WarningListResponse {
@@ -58,10 +66,11 @@ export interface WarningCandidate {
     term: string
     level: 'high' | 'medium' | 'low'
   }>
-  attendanceWarnings: Array<{
-    course: string
-    absentCount: number
-    lastAbsentAt: string
+  creditWarnings: Array<{
+    scope: 'semester' | 'total'
+    term?: string
+    earnedCredits: number
+    threshold: number
     level: 'high' | 'medium' | 'low'
   }>
 }
@@ -71,11 +80,38 @@ export interface WarningCandidatesResponse {
   total: number
 }
 
+/** 预警管理列表行（候选 + 已下发状态） */
+export interface ManagementListItem {
+  studentId: string
+  studentName: string
+  type: WarningType
+  level: WarningLevel
+  course: string
+  message: string
+  score?: number | null
+  absentCount?: number | null
+  term?: string | null
+  earnedCredits?: number | null
+  /** 已下发的预警 ID，有则显示取消预警 */
+  issuedWarningId?: string | null
+}
+
+export interface ManagementListResponse {
+  items: ManagementListItem[]
+  pagination: {
+    page: number
+    limit: number
+    total: number
+    totalPages: number
+  }
+}
+
 export const warningService = {
   async getWarnings(params?: {
     studentId?: string
     type?: WarningType
     level?: WarningLevel
+    course?: string
     page?: number
     limit?: number
   }): Promise<WarningListResponse> {
@@ -102,11 +138,39 @@ export const warningService = {
   },
 
   async getWarningCandidates(params?: {
-    type?: 'grade' | 'attendance' | ''
-    gradeThreshold?: number
-    attendanceThreshold?: number
+    type?: 'grade' | 'credit_semester' | 'credit_total' | ''
+    gradeHigh?: number
+    gradeMedium?: number
+    gradeLow?: number
+    semesterHigh?: number
+    semesterMedium?: number
+    semesterLow?: number
+    totalHigh?: number
+    totalMedium?: number
+    totalLow?: number
   }): Promise<WarningCandidatesResponse> {
     const response = await api.get<WarningCandidatesResponse>('/warnings/candidates', { params })
+    return response.data
+  },
+
+  async getManagementList(params?: {
+    type?: 'grade' | 'credit_semester' | 'credit_total' | ''
+    level?: WarningLevel
+    course?: string
+    studentId?: string
+    page?: number
+    limit?: number
+    gradeHigh?: number
+    gradeMedium?: number
+    gradeLow?: number
+    semesterHigh?: number
+    semesterMedium?: number
+    semesterLow?: number
+    totalHigh?: number
+    totalMedium?: number
+    totalLow?: number
+  }): Promise<ManagementListResponse> {
+    const response = await api.get<ManagementListResponse>('/warnings/management-list', { params })
     return response.data
   },
 }

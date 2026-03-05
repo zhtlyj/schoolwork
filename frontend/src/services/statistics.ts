@@ -5,8 +5,8 @@ export interface Statistics {
     total: number
     byType: {
       grade: number
-      attendance: number
-      assignment: number
+      credit_semester: number
+      credit_total: number
     }
     byLevel: {
       high: number
@@ -31,12 +31,17 @@ export interface Statistics {
     withWarnings: number
     withInterventions: number
     withBoth: number
+    withoutWarnings: number
   }
   grade: {
     total: number
     average: number
     below60: number
     below60Percent: number
+    above60: number
+    passRate: number
+    courseCount: number
+    termCount: number
   }
   attendance: {
     total: number

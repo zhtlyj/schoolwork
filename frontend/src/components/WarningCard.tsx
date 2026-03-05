@@ -40,10 +40,10 @@ export default function WarningCard({ warning }: WarningCardProps) {
     switch (type) {
       case 'grade':
         return '📊 成绩预警'
-      case 'attendance':
-        return '⏰ 出勤预警'
-      case 'assignment':
-        return '📝 作业预警'
+      case 'credit_semester':
+        return '📚 学期学分预警'
+      case 'credit_total':
+        return '📚 总学分预警'
       default:
         return '⚠️ 预警'
     }

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useAuth } from '../contexts/AuthContext'
 import { useNavigate } from 'react-router-dom'
 import StudentManagement from '../components/StudentManagement'
@@ -10,7 +10,7 @@ import MyGrades from '../components/MyGrades'
 import LearningRecords from '../components/LearningRecords'
 import UserProfile from '../components/UserProfile'
 import { warningService, Warning } from '../services/warnings'
-import { interventionService, Intervention } from '../services/interventions'
+import { operationLogService, OperationLog } from '../services/operationLogs'
 import './Home.css'
 
 
@@ -22,12 +22,20 @@ export default function Home() {
   const [showUserMenu, setShowUserMenu] = useState(false)
   const [settingsTab, setSettingsTab] = useState<'warning' | 'intervention' | 'blockchain' | 'system' | 'permission'>('warning')
   
-  // 设置数据
+  // 设置数据：预警规则按高危/中危/低危细分
   const [warningSettings, setWarningSettings] = useState({
-    gradeThreshold: 60,
-    attendanceThreshold: 3,
-    assignmentThreshold: 2,
-    enableAutoWarning: true,
+    // 成绩预警：score < high 高危，high<=score<medium 中危，medium<=score<low 低危
+    gradeHigh: 50,
+    gradeMedium: 60,
+    gradeLow: 70,
+    // 学期学分：earned < high 高危，high<=earned<medium 中危，medium<=earned<low 低危
+    semesterHigh: 5,
+    semesterMedium: 10,
+    semesterLow: 15,
+    // 总学分：earned < high 高危，high<=earned<medium 中危，medium<=earned<low 低危
+    totalHigh: 10,
+    totalMedium: 20,
+    totalLow: 30,
   })
   
   const [interventionSettings, setInterventionSettings] = useState({
@@ -50,15 +58,18 @@ export default function Home() {
     maxFileSize: 10,
   })
 
-  // 预警数据状态（用于统计卡片）
+  // 操作日志（权限管理内，实时同步）
+  const [operationLogs, setOperationLogs] = useState<OperationLog[]>([])
+  const [operationLogsLoading, setOperationLogsLoading] = useState(false)
+
+  // 预警数据状态（用于统计卡片和筛选项）
   const [warnings, setWarnings] = useState<Warning[]>([])
   const [warningsLoading, setWarningsLoading] = useState(false)
 
-  // 干预记录数据状态（用于统计卡片）
-  const [interventions, setInterventions] = useState<Intervention[]>([])
-  const [interventionsLoading, setInterventionsLoading] = useState(false)
+  // 预警类型筛选项（成绩/学期学分/总学分）
+  const [warningTypeFilter, setWarningTypeFilter] = useState<'' | 'grade' | 'credit_semester' | 'credit_total'>('')
 
-  // 获取预警数据（用于统计卡片）
+  // 获取预警数据（用于统计卡片和筛选项）
   useEffect(() => {
     const fetchWarnings = async () => {
       setWarningsLoading(true)
@@ -81,28 +92,27 @@ export default function Home() {
     }
   }, [user])
 
-  // 获取干预记录数据（用于统计卡片）
-  useEffect(() => {
-    const fetchInterventions = async () => {
-      setInterventionsLoading(true)
-      try {
-        // 学生端获取自己的干预，教职工/管理员获取全部干预
-        const res = await interventionService.getInterventions({
-          page: 1,
-          limit: 100,
-        })
-        setInterventions(res.interventions)
-      } catch (err) {
-        console.error('获取干预记录失败:', err)
-      } finally {
-        setInterventionsLoading(false)
-      }
+  // 获取操作日志（权限管理内，进入时拉取 + 每8秒轮询实现实时同步）
+  const fetchOperationLogs = useCallback(async () => {
+    if (user?.role !== 'staff' && user?.role !== 'admin') return
+    setOperationLogsLoading(true)
+    try {
+      const res = await operationLogService.getLogs({ limit: 50 })
+      setOperationLogs(res.logs)
+    } catch (err) {
+      console.error('获取操作日志失败:', err)
+    } finally {
+      setOperationLogsLoading(false)
     }
+  }, [user?.role])
 
-    if (user) {
-      fetchInterventions()
+  useEffect(() => {
+    if (activeNav === 'settings' && settingsTab === 'permission' && (user?.role === 'staff' || user?.role === 'admin')) {
+      fetchOperationLogs()
+      const timer = setInterval(fetchOperationLogs, 8000)
+      return () => clearInterval(timer)
     }
-  }, [user])
+  }, [activeNav, settingsTab, user?.role, fetchOperationLogs])
 
   const handleLogout = () => {
     logout()
@@ -261,47 +271,46 @@ export default function Home() {
 
       <main className="home-main">
         <div className="dashboard">
-          <div className="stats-grid">
-            <div className="stat-card">
-              <div className="stat-icon">⚠️</div>
+          <div className="stats-grid stats-filter-grid">
+            <button
+              type="button"
+              className={`stat-card stat-filter-card ${warningTypeFilter === 'grade' ? 'active' : ''}`}
+              onClick={() => setWarningTypeFilter((v) => (v === 'grade' ? '' : 'grade'))}
+            >
+              <div className="stat-icon">📝</div>
               <div className="stat-content">
                 <div className="stat-value">
-                  {warningsLoading ? '...' : warnings.length}
+                  {warningsLoading ? '...' : warnings.filter((w) => w.type === 'grade').length}
                 </div>
-                <div className="stat-label">预警数量</div>
+                <div className="stat-label">成绩预警</div>
               </div>
-            </div>
-            <div className="stat-card">
+            </button>
+            <button
+              type="button"
+              className={`stat-card stat-filter-card ${warningTypeFilter === 'credit_semester' ? 'active' : ''}`}
+              onClick={() => setWarningTypeFilter((v) => (v === 'credit_semester' ? '' : 'credit_semester'))}
+            >
+              <div className="stat-icon">📚</div>
+              <div className="stat-content">
+                <div className="stat-value">
+                  {warningsLoading ? '...' : warnings.filter((w) => w.type === 'credit_semester').length}
+                </div>
+                <div className="stat-label">学期学分预警</div>
+              </div>
+            </button>
+            <button
+              type="button"
+              className={`stat-card stat-filter-card ${warningTypeFilter === 'credit_total' ? 'active' : ''}`}
+              onClick={() => setWarningTypeFilter((v) => (v === 'credit_total' ? '' : 'credit_total'))}
+            >
               <div className="stat-icon">📊</div>
               <div className="stat-content">
                 <div className="stat-value">
-                  {warningsLoading
-                    ? '...'
-                    : warnings.filter((w) => w.level === 'high').length}
+                  {warningsLoading ? '...' : warnings.filter((w) => w.type === 'credit_total').length}
                 </div>
-                <div className="stat-label">高危预警</div>
+                <div className="stat-label">总学分预警</div>
               </div>
-            </div>
-            <div className="stat-card">
-              <div className="stat-icon">🔧</div>
-              <div className="stat-content">
-                <div className="stat-value">
-                  {interventionsLoading ? '...' : interventions.length}
-                </div>
-                <div className="stat-label">干预记录</div>
-              </div>
-            </div>
-            <div className="stat-card">
-              <div className="stat-icon">⛓️</div>
-              <div className="stat-content">
-                <div className="stat-value">
-                  {warningsLoading
-                    ? '...'
-                    : warnings.filter((w) => w.blockHash).length}
-                </div>
-                <div className="stat-label">已上链数据</div>
-              </div>
-            </div>
+            </button>
           </div>
 
           {activeNav === 'dashboard' && (
@@ -367,18 +376,19 @@ export default function Home() {
 
             {activeNav === 'warnings' && (user?.role === 'staff' || user?.role === 'admin') && (
               <WarningManagement
-                gradeThreshold={warningSettings.gradeThreshold}
-                attendanceThreshold={warningSettings.attendanceThreshold}
+                warningSettings={warningSettings}
+                typeFilter={warningTypeFilter}
+                onTypeFilterChange={setWarningTypeFilter}
               />
             )}
             {activeNav === 'warnings' && user?.role === 'student' && (
               <div className="page-content">
                 <h2 className="page-title">⚠️ 我的预警</h2>
-                <WarningList />
+                <WarningList typeFilter={warningTypeFilter} onTypeFilterChange={setWarningTypeFilter} showFilters />
               </div>
             )}
             {activeNav === 'dashboard' && activeTab === 'warnings' && (
-              <WarningList />
+              <WarningList typeFilter={warningTypeFilter} onTypeFilterChange={setWarningTypeFilter} showFilters />
             )}
 
             {activeNav === 'interventions' && (user?.role === 'staff' || user?.role === 'admin') && (
@@ -445,80 +455,144 @@ export default function Home() {
                   {settingsTab === 'warning' && (
                     <div className="settings-panel">
                       <h3>预警规则配置</h3>
+                      <p className="form-hint" style={{ marginBottom: 16 }}>按高危、中危、低危分别设置阈值，达到对应条件时触发相应级别预警</p>
                       <div className="settings-form">
-                        <div className="form-group">
-                          <label>成绩预警阈值</label>
-                          <div className="input-group">
-                            <input
-                              type="number"
-                              value={warningSettings.gradeThreshold}
-                              onChange={(e) =>
-                                setWarningSettings({
-                                  ...warningSettings,
-                                  gradeThreshold: parseInt(e.target.value) || 60,
-                                })
-                              }
-                              min="0"
-                              max="100"
-                            />
-                            <span className="input-suffix">分</span>
+                        <div className="warning-rules-section">
+                          <h4>📝 成绩预警（分数）</h4>
+                          <div className="form-row-triple">
+                            <div className="form-group">
+                              <label>高危</label>
+                              <div className="input-group">
+                                <input
+                                  type="number"
+                                  value={warningSettings.gradeHigh}
+                                  onChange={(e) => setWarningSettings({ ...warningSettings, gradeHigh: parseInt(e.target.value) || 50 })}
+                                  min="0"
+                                  max="100"
+                                />
+                                <span className="input-suffix">分以下</span>
+                              </div>
+                              <p className="form-hint">成绩 &lt; 此值</p>
+                            </div>
+                            <div className="form-group">
+                              <label>中危</label>
+                              <div className="input-group">
+                                <input
+                                  type="number"
+                                  value={warningSettings.gradeMedium}
+                                  onChange={(e) => setWarningSettings({ ...warningSettings, gradeMedium: parseInt(e.target.value) || 60 })}
+                                  min="0"
+                                  max="100"
+                                />
+                                <span className="input-suffix">分以下</span>
+                              </div>
+                              <p className="form-hint">高危值 ≤ 成绩 &lt; 此值</p>
+                            </div>
+                            <div className="form-group">
+                              <label>低危</label>
+                              <div className="input-group">
+                                <input
+                                  type="number"
+                                  value={warningSettings.gradeLow}
+                                  onChange={(e) => setWarningSettings({ ...warningSettings, gradeLow: parseInt(e.target.value) || 70 })}
+                                  min="0"
+                                  max="100"
+                                />
+                                <span className="input-suffix">分以下</span>
+                              </div>
+                              <p className="form-hint">中危值 ≤ 成绩 &lt; 此值</p>
+                            </div>
                           </div>
-                          <p className="form-hint">成绩低于此分数将触发预警</p>
                         </div>
 
-                        <div className="form-group">
-                          <label>出勤预警阈值</label>
-                          <div className="input-group">
-                            <input
-                              type="number"
-                              value={warningSettings.attendanceThreshold}
-                              onChange={(e) =>
-                                setWarningSettings({
-                                  ...warningSettings,
-                                  attendanceThreshold: parseInt(e.target.value) || 3,
-                                })
-                              }
-                              min="0"
-                            />
-                            <span className="input-suffix">次</span>
+                        <div className="warning-rules-section">
+                          <h4>📚 学期学分预警</h4>
+                          <div className="form-row-triple">
+                            <div className="form-group">
+                              <label>高危</label>
+                              <div className="input-group">
+                                <input
+                                  type="number"
+                                  value={warningSettings.semesterHigh}
+                                  onChange={(e) => setWarningSettings({ ...warningSettings, semesterHigh: parseInt(e.target.value) || 5 })}
+                                  min="0"
+                                />
+                                <span className="input-suffix">学分以下</span>
+                              </div>
+                              <p className="form-hint">学期学分 &lt; 此值</p>
+                            </div>
+                            <div className="form-group">
+                              <label>中危</label>
+                              <div className="input-group">
+                                <input
+                                  type="number"
+                                  value={warningSettings.semesterMedium}
+                                  onChange={(e) => setWarningSettings({ ...warningSettings, semesterMedium: parseInt(e.target.value) || 10 })}
+                                  min="0"
+                                />
+                                <span className="input-suffix">学分以下</span>
+                              </div>
+                              <p className="form-hint">高危值 ≤ 学分 &lt; 此值</p>
+                            </div>
+                            <div className="form-group">
+                              <label>低危</label>
+                              <div className="input-group">
+                                <input
+                                  type="number"
+                                  value={warningSettings.semesterLow}
+                                  onChange={(e) => setWarningSettings({ ...warningSettings, semesterLow: parseInt(e.target.value) || 15 })}
+                                  min="0"
+                                />
+                                <span className="input-suffix">学分以下</span>
+                              </div>
+                              <p className="form-hint">中危值 ≤ 学分 &lt; 此值</p>
+                            </div>
                           </div>
-                          <p className="form-hint">缺勤次数超过此值将触发预警</p>
                         </div>
 
-                        <div className="form-group">
-                          <label>作业预警阈值</label>
-                          <div className="input-group">
-                            <input
-                              type="number"
-                              value={warningSettings.assignmentThreshold}
-                              onChange={(e) =>
-                                setWarningSettings({
-                                  ...warningSettings,
-                                  assignmentThreshold: parseInt(e.target.value) || 2,
-                                })
-                              }
-                              min="0"
-                            />
-                            <span className="input-suffix">次</span>
+                        <div className="warning-rules-section">
+                          <h4>📊 总学分预警</h4>
+                          <div className="form-row-triple">
+                            <div className="form-group">
+                              <label>高危</label>
+                              <div className="input-group">
+                                <input
+                                  type="number"
+                                  value={warningSettings.totalHigh}
+                                  onChange={(e) => setWarningSettings({ ...warningSettings, totalHigh: parseInt(e.target.value) || 10 })}
+                                  min="0"
+                                />
+                                <span className="input-suffix">学分以下</span>
+                              </div>
+                              <p className="form-hint">总学分 &lt; 此值</p>
+                            </div>
+                            <div className="form-group">
+                              <label>中危</label>
+                              <div className="input-group">
+                                <input
+                                  type="number"
+                                  value={warningSettings.totalMedium}
+                                  onChange={(e) => setWarningSettings({ ...warningSettings, totalMedium: parseInt(e.target.value) || 20 })}
+                                  min="0"
+                                />
+                                <span className="input-suffix">学分以下</span>
+                              </div>
+                              <p className="form-hint">高危值 ≤ 总学分 &lt; 此值</p>
+                            </div>
+                            <div className="form-group">
+                              <label>低危</label>
+                              <div className="input-group">
+                                <input
+                                  type="number"
+                                  value={warningSettings.totalLow}
+                                  onChange={(e) => setWarningSettings({ ...warningSettings, totalLow: parseInt(e.target.value) || 30 })}
+                                  min="0"
+                                />
+                                <span className="input-suffix">学分以下</span>
+                              </div>
+                              <p className="form-hint">中危值 ≤ 总学分 &lt; 此值</p>
+                            </div>
                           </div>
-                          <p className="form-hint">未交作业次数超过此值将触发预警</p>
-                        </div>
-
-                        <div className="form-group">
-                          <label className="checkbox-label">
-                            <input
-                              type="checkbox"
-                              checked={warningSettings.enableAutoWarning}
-                              onChange={(e) =>
-                                setWarningSettings({
-                                  ...warningSettings,
-                                  enableAutoWarning: e.target.checked,
-                                })
-                              }
-                            />
-                            <span>启用自动预警</span>
-                          </label>
-                          <p className="form-hint">系统将自动检测并生成预警信息</p>
                         </div>
 
                         <div className="form-actions">
@@ -817,21 +891,37 @@ export default function Home() {
                         </div>
 
                         <div className="permission-card">
-                          <h4>操作日志</h4>
-                          <div className="log-list">
-                            <div className="log-item">
-                              <span className="log-time">2024-01-15 10:30</span>
-                              <span className="log-action">管理员修改了预警规则</span>
-                            </div>
-                            <div className="log-item">
-                              <span className="log-time">2024-01-14 15:20</span>
-                              <span className="log-action">管理员更新了区块链配置</span>
-                            </div>
-                            <div className="log-item">
-                              <span className="log-time">2024-01-13 09:10</span>
-                              <span className="log-action">管理员修改了系统参数</span>
-                            </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                            <h4 style={{ margin: 0 }}>操作日志</h4>
+                            <button className="btn-secondary btn-small" onClick={fetchOperationLogs} disabled={operationLogsLoading}>
+                              {operationLogsLoading ? '刷新中...' : '🔄 刷新'}
+                            </button>
                           </div>
+                          <p className="form-hint" style={{ marginBottom: 12, fontSize: 13 }}>系统操作记录，每8秒自动刷新</p>
+                          {operationLogsLoading && operationLogs.length === 0 ? (
+                            <div className="loading-state" style={{ padding: 20 }}>加载中...</div>
+                          ) : operationLogs.length === 0 ? (
+                            <div className="empty-state" style={{ padding: 20, minHeight: 80 }}>
+                              <p>暂无操作记录</p>
+                            </div>
+                          ) : (
+                            <div className="log-list">
+                              {operationLogs.map((log) => (
+                                <div key={log._id} className="log-item">
+                                  <span className="log-time">
+                                    {new Date(log.createdAt).toLocaleString('zh-CN', {
+                                      year: 'numeric',
+                                      month: '2-digit',
+                                      day: '2-digit',
+                                      hour: '2-digit',
+                                      minute: '2-digit',
+                                    })}
+                                  </span>
+                                  <span className="log-action">{log.details}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       </div>
                     </div>

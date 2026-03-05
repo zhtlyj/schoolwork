@@ -21,7 +21,7 @@ export interface RegisterData {
 }
 
 export interface LoginData {
-  username: string
+  userId: string  // 学号或工号
   password: string
 }
 

@@ -3,6 +3,7 @@ import connectDB from '@/lib/mongodb'
 import Intervention from '@/models/Intervention'
 import User from '@/models/User'
 import Warning from '@/models/Warning'
+import OperationLog from '@/models/OperationLog'
 import { verifyToken } from '@/lib/jwt'
 
 export async function OPTIONS() {
@@ -174,6 +175,15 @@ export async function POST(request: Request) {
       assignedToName: assignedTo ? assignedToUser!.name : undefined,
       notes: notes || undefined,
       blockHash,
+    })
+
+    await OperationLog.create({
+      operatorId: creator._id.toString(),
+      operatorName: creator.name,
+      action: 'create',
+      targetType: 'intervention',
+      targetId: intervention._id.toString(),
+      details: `${creator.name}为${student.name}创建了${type}干预`,
     })
 
     return NextResponse.json(

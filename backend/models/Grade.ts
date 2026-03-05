@@ -7,6 +7,7 @@ export interface IGrade extends Document {
   studentName: string
   course: string
   score: number
+  credits: number // 课程学分
   examType: ExamType
   term: string // 学期，如 2024-2025-1
   createdAt: Date
@@ -34,6 +35,12 @@ const GradeSchema = new Schema<IGrade>(
       required: [true, '成绩不能为空'],
       min: 0,
       max: 100,
+    },
+    credits: {
+      type: Number,
+      default: 2,
+      min: 0,
+      max: 10,
     },
     examType: {
       type: String,

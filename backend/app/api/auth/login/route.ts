@@ -19,22 +19,24 @@ export async function POST(request: Request) {
     await connectDB()
 
     const body = await request.json()
-    const { username, password } = body
+    const { userId, password } = body
 
-    // 验证必填字段
-    if (!username || !password) {
+    // 验证必填字段（userId 为学号或工号）
+    if (!userId || !password) {
       return NextResponse.json(
-        { message: '请输入用户名和密码' },
+        { message: '请输入学号/工号和密码' },
         { status: 400 }
       )
     }
 
-    // 查找用户（包含密码字段）
-    const user = await User.findOne({ username }).select('+password')
+    // 按学号或工号查找用户（包含密码字段）
+    const user = await User.findOne({
+      $or: [{ studentId: userId }, { staffId: userId }],
+    }).select('+password')
 
     if (!user) {
       return NextResponse.json(
-        { message: '用户名或密码错误' },
+        { message: '学号/工号或密码错误' },
         { status: 401 }
       )
     }
@@ -44,7 +46,7 @@ export async function POST(request: Request) {
 
     if (!isPasswordValid) {
       return NextResponse.json(
-        { message: '用户名或密码错误' },
+        { message: '学号/工号或密码错误' },
         { status: 401 }
       )
     }

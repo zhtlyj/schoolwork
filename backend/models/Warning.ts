@@ -3,7 +3,7 @@ import mongoose, { Document, Schema } from 'mongoose'
 export interface IWarning extends Document {
   studentId: string
   studentName: string
-  type: 'grade' | 'attendance' | 'assignment'
+  type: 'grade' | 'credit_semester' | 'credit_total'
   level: 'low' | 'medium' | 'high'
   course: string
   message: string
@@ -28,7 +28,7 @@ const WarningSchema = new Schema<IWarning>(
     },
     type: {
       type: String,
-      enum: ['grade', 'attendance', 'assignment'],
+      enum: ['grade', 'credit_semester', 'credit_total'],
       required: [true, '预警类型不能为空'],
     },
     level: {
@@ -74,7 +74,11 @@ WarningSchema.index({ studentId: 1, createdAt: -1 })
 WarningSchema.index({ type: 1, level: 1 })
 WarningSchema.index({ isRead: 1 })
 
-const Warning = mongoose.models.Warning || mongoose.model<IWarning>('Warning', WarningSchema)
+// 清除缓存以确保使用最新 schema（避免 enum 变更后仍用旧定义）
+if (mongoose.models.Warning) {
+  delete mongoose.models.Warning
+}
+const Warning = mongoose.model<IWarning>('Warning', WarningSchema)
 
 export default Warning
 

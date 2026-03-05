@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server'
 import connectDB from '@/lib/mongodb'
 import User from '@/models/User'
+import OperationLog from '@/models/OperationLog'
+import { verifyToken } from '@/lib/jwt'
 
 export async function OPTIONS() {
   return new NextResponse(null, {
@@ -122,6 +124,17 @@ export async function POST(request: Request) {
       studentId,
       name,
     })
+
+    if (operator) {
+      await OperationLog.create({
+        operatorId: operator._id.toString(),
+        operatorName: operator.name,
+        action: 'create',
+        targetType: 'student',
+        targetId: student._id.toString(),
+        details: `${operator.name}添加了学生${name}（${studentId}）`,
+      })
+    }
 
     // 返回学生信息（不包含密码）
     return NextResponse.json(
