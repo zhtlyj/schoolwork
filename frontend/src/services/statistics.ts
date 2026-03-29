@@ -18,10 +18,10 @@ export interface Statistics {
   intervention: {
     total: number
     byStatus: {
-      pending: number
-      'in-progress': number
+      student_pending: number
+      pending_review: number
       completed: number
-      cancelled: number
+      revoked: number
     }
     byType: Record<string, number>
     recent30Days: number
@@ -42,6 +42,14 @@ export interface Statistics {
     passRate: number
     courseCount: number
     termCount: number
+    /** 按课程聚合：条数、平均分、不及格数、及格率 */
+    byCourse: Array<{
+      course: string
+      recordCount: number
+      average: number
+      below60: number
+      passRate: number
+    }>
   }
   attendance: {
     total: number

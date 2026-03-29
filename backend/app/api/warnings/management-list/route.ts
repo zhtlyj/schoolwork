@@ -30,6 +30,8 @@ type FlatRow = {
   earnedCredits?: number | null
   /** 已下发的预警 ID，有则显示取消预警 */
   issuedWarningId?: string | null
+  /** 链上交易哈希（若有） */
+  blockHash?: string | null
 }
 
 // 获取预警管理列表：候选（系统判定）+ 已下发状态
@@ -334,7 +336,11 @@ export async function GET(request: Request) {
           ? `${r.studentId}::credit_semester::${r.course}`
           : `${r.studentId}::credit_total::总学分`
       const issued = issuedMap.get(key)
-      const out: FlatRow = { ...r, issuedWarningId: issued?._id ?? null }
+      const out: FlatRow = {
+        ...r,
+        issuedWarningId: issued?._id ? String(issued._id) : null,
+        blockHash: issued?.blockHash ? String(issued.blockHash) : null,
+      }
       if (r.type === 'grade') {
         const g = gradeMap.get(`${r.studentId}::${r.course}`)
         const a = attendanceMap.get(`${r.studentId}::${r.course}`)

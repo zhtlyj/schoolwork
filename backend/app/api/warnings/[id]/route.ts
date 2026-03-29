@@ -137,7 +137,7 @@ export async function PUT(
   }
 }
 
-// 删除预警
+// 删除预警（需提交取消原因，写入操作日志）
 export async function DELETE(
   request: Request,
   { params }: { params: { id: string } }
@@ -160,6 +160,17 @@ export async function DELETE(
       return NextResponse.json({ message: '无权限：仅教职工/管理员可删除预警' }, { status: 403 })
     }
 
+    let reason = ''
+    try {
+      const body = await request.json()
+      reason = typeof body?.reason === 'string' ? body.reason.trim() : ''
+    } catch {
+      reason = ''
+    }
+    if (!reason) {
+      return NextResponse.json({ message: '请填写取消原因' }, { status: 400 })
+    }
+
     const operator = await User.findById(decoded.userId)
     await Warning.deleteOne({ _id: params.id })
 
@@ -170,7 +181,7 @@ export async function DELETE(
         action: 'delete',
         targetType: 'warning',
         targetId: params.id,
-        details: `${operator.name}取消了对${warning.studentName}的预警`,
+        details: `${operator.name}取消了对${warning.studentName}的预警，原因：${reason}`,
       })
     }
 

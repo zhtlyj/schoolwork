@@ -5,7 +5,8 @@ export interface IIntervention extends Document {
   studentName: string // 学生姓名
   warningId?: string // 关联的预警ID（可选）
   type: string // 干预类型：学习辅导、出勤提醒、家长沟通、心理辅导等
-  status: 'pending' | 'in-progress' | 'completed' | 'cancelled' // 状态
+  /** student_pending 待学生处理 | pending_review 待审核 | completed 已完成 | revoked 已撤销；另含历史 pending/in-progress/cancelled */
+  status: string
   description: string // 干预描述
   plan?: string // 干预计划详情
   startDate?: Date // 开始日期
@@ -15,8 +16,14 @@ export interface IIntervention extends Document {
   createdByName: string // 创建者姓名
   assignedTo?: string // 分配给谁（可选，如具体教师）
   assignedToName?: string // 分配对象姓名
-  notes?: string // 备注
-  result?: string // 干预结果
+  notes?: string // 学生完成情况说明（提交审核时必填）
+  submittedAt?: Date // 学生提交审核时间
+  reviewResult?: 'pass' | 'fail'
+  reviewOpinion?: string // 审核意见
+  reviewedAt?: Date
+  revokedAt?: Date // 撤销时间
+  revokeReason?: string // 撤销原因
+  result?: string // 干预结果（兼容旧字段）
   blockHash?: string // 区块链哈希
   createdAt: Date
   updatedAt: Date
@@ -44,8 +51,16 @@ const InterventionSchema = new Schema<IIntervention>(
     },
     status: {
       type: String,
-      enum: ['pending', 'in-progress', 'completed', 'cancelled'],
-      default: 'pending',
+      enum: [
+        'student_pending',
+        'pending_review',
+        'completed',
+        'revoked',
+        'pending',
+        'in-progress',
+        'cancelled',
+      ],
+      default: 'student_pending',
       required: [true, '状态不能为空'],
     },
     description: {
@@ -84,6 +99,27 @@ const InterventionSchema = new Schema<IIntervention>(
       type: String,
     },
     notes: {
+      type: String,
+      trim: true,
+    },
+    submittedAt: {
+      type: Date,
+    },
+    reviewResult: {
+      type: String,
+      enum: ['pass', 'fail'],
+    },
+    reviewOpinion: {
+      type: String,
+      trim: true,
+    },
+    reviewedAt: {
+      type: Date,
+    },
+    revokedAt: {
+      type: Date,
+    },
+    revokeReason: {
       type: String,
       trim: true,
     },

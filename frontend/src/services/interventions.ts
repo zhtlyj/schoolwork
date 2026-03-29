@@ -1,6 +1,11 @@
 import api from './api'
 
-export type InterventionStatus = 'pending' | 'in-progress' | 'completed' | 'cancelled'
+/** API 返回的规范状态（历史 pending 等会在后端序列化为下列值） */
+export type InterventionStatus =
+  | 'student_pending'
+  | 'pending_review'
+  | 'completed'
+  | 'revoked'
 
 export interface Intervention {
   _id: string
@@ -8,7 +13,7 @@ export interface Intervention {
   studentName: string
   warningId?: string
   type: string
-  status: InterventionStatus
+  status: InterventionStatus | string
   description: string
   plan?: string
   startDate?: string
@@ -19,6 +24,12 @@ export interface Intervention {
   assignedTo?: string
   assignedToName?: string
   notes?: string
+  submittedAt?: string
+  reviewResult?: 'pass' | 'fail'
+  reviewOpinion?: string
+  reviewedAt?: string
+  revokedAt?: string
+  revokeReason?: string
   result?: string
   blockHash?: string
   createdAt: string
@@ -51,7 +62,6 @@ export interface CreateInterventionData {
 
 export interface UpdateInterventionData {
   type?: string
-  status?: InterventionStatus
   description?: string
   plan?: string
   startDate?: string
@@ -61,12 +71,41 @@ export interface UpdateInterventionData {
   notes?: string
   result?: string
   blockHash?: string
+  submitForReview?: boolean
+  review?: { result: 'pass' | 'fail'; opinion?: string }
+  revoke?: { reason: string }
+}
+
+/** 与后端 canonical 一致，兼容旧数据 */
+export function canonicalInterventionStatusClient(status: string): string {
+  const map: Record<string, string> = {
+    pending: 'student_pending',
+    'in-progress': 'pending_review',
+    cancelled: 'revoked',
+  }
+  return map[status] || status
+}
+
+export function interventionStatusLabel(status: string): string {
+  const s = canonicalInterventionStatusClient(status)
+  switch (s) {
+    case 'student_pending':
+      return '待学生处理'
+    case 'pending_review':
+      return '待审核'
+    case 'completed':
+      return '已完成'
+    case 'revoked':
+      return '已撤销'
+    default:
+      return status
+  }
 }
 
 export const interventionService = {
   async getInterventions(params?: {
     studentId?: string
-    status?: InterventionStatus
+    status?: string
     type?: string
     page?: number
     limit?: number
@@ -98,4 +137,3 @@ export const interventionService = {
     return response.data
   },
 }
-

@@ -94,6 +94,8 @@ export interface ManagementListItem {
   earnedCredits?: number | null
   /** 已下发的预警 ID，有则显示取消预警 */
   issuedWarningId?: string | null
+  /** 链上存证交易哈希 */
+  blockHash?: string | null
 }
 
 export interface ManagementListResponse {
@@ -107,6 +109,11 @@ export interface ManagementListResponse {
 }
 
 export const warningService = {
+  async getWarningById(id: string): Promise<{ warning: Warning }> {
+    const response = await api.get<{ warning: Warning }>(`/warnings/${id}`)
+    return response.data
+  },
+
   async getWarnings(params?: {
     studentId?: string
     type?: WarningType
@@ -132,8 +139,10 @@ export const warningService = {
     return response.data
   },
 
-  async deleteWarning(id: string): Promise<{ message: string }> {
-    const response = await api.delete<{ message: string }>(`/warnings/${id}`)
+  async deleteWarning(id: string, reason: string): Promise<{ message: string }> {
+    const response = await api.delete<{ message: string }>(`/warnings/${id}`, {
+      data: { reason },
+    })
     return response.data
   },
 

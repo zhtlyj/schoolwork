@@ -1,8 +1,12 @@
 import { useState, useEffect } from 'react'
 import { attendanceService, AttendanceRecord } from '../services/attendance'
 import { gradeService, Grade } from '../services/grades'
-import { interventionService, Intervention } from '../services/interventions'
-import { useAuth } from '../contexts/AuthContext'
+import {
+  interventionService,
+  Intervention,
+  canonicalInterventionStatusClient,
+  interventionStatusLabel,
+} from '../services/interventions'
 import '../pages/Home.css'
 
 /**
@@ -10,7 +14,6 @@ import '../pages/Home.css'
  * 整合展示学生的出勤记录、成绩记录和干预记录
  */
 export default function LearningRecords() {
-  const { user } = useAuth()
   const [activeTab, setActiveTab] = useState<'attendance' | 'grades' | 'interventions'>('attendance')
 
   // 出勤记录
@@ -27,6 +30,7 @@ export default function LearningRecords() {
   const [interventions, setInterventions] = useState<Intervention[]>([])
   const [interventionsLoading, setInterventionsLoading] = useState(false)
   const [interventionsError, setInterventionsError] = useState('')
+  const [interventionSubmittingId, setInterventionSubmittingId] = useState<string | null>(null)
 
   // 获取出勤记录
   const fetchAttendance = async () => {
@@ -104,8 +108,15 @@ export default function LearningRecords() {
     const passCount = grades.filter((g) => g.score >= 60).length
 
     // 干预统计
-    const activeInterventions = interventions.filter((i) => i.status === 'in-progress').length
-    const completedInterventions = interventions.filter((i) => i.status === 'completed').length
+    const pendingStudent = interventions.filter(
+      (i) => canonicalInterventionStatusClient(i.status) === 'student_pending'
+    ).length
+    const pendingReview = interventions.filter(
+      (i) => canonicalInterventionStatusClient(i.status) === 'pending_review'
+    ).length
+    const completedInterventions = interventions.filter(
+      (i) => canonicalInterventionStatusClient(i.status) === 'completed'
+    ).length
 
     return {
       attendance: {
@@ -121,7 +132,8 @@ export default function LearningRecords() {
       },
       interventions: {
         total: interventions.length,
-        active: activeInterventions,
+        pendingStudent,
+        pendingReview,
         completed: completedInterventions,
       },
     }
@@ -129,35 +141,41 @@ export default function LearningRecords() {
 
   const stats = calculateStats()
 
-  // 获取干预状态文本
-  const getInterventionStatusText = (status: string) => {
-    switch (status) {
-      case 'pending':
-        return '待处理'
-      case 'in-progress':
-        return '进行中'
-      case 'completed':
-        return '已完成'
-      case 'cancelled':
-        return '已取消'
-      default:
-        return status
-    }
-  }
-
-  // 获取干预状态样式
   const getInterventionStatusClass = (status: string) => {
-    switch (status) {
-      case 'pending':
+    const s = canonicalInterventionStatusClient(status)
+    switch (s) {
+      case 'student_pending':
         return 'status-pending'
-      case 'in-progress':
+      case 'pending_review':
         return 'status-in-progress'
       case 'completed':
         return 'status-completed'
-      case 'cancelled':
+      case 'revoked':
         return 'status-cancelled'
       default:
         return ''
+    }
+  }
+
+  const submitInterventionReview = async (intervention: Intervention, notes: string) => {
+    const text = notes.trim()
+    if (!text) {
+      setInterventionsError('请先填写完成情况说明')
+      return
+    }
+    setInterventionsError('')
+    setInterventionSubmittingId(intervention._id)
+    try {
+      await interventionService.updateIntervention(intervention._id, {
+        notes: text,
+        submitForReview: true,
+      })
+      const res = await interventionService.getInterventions({ page: 1, limit: 100 })
+      setInterventions(res.interventions)
+    } catch (err: any) {
+      setInterventionsError(err.response?.data?.message || '提交失败')
+    } finally {
+      setInterventionSubmittingId(null)
     }
   }
 
@@ -205,8 +223,15 @@ export default function LearningRecords() {
         <div className="stat-card-small">
           <div className="stat-icon-small">🔧</div>
           <div className="stat-content-small">
-            <div className="stat-value-small">{stats.interventions.active}</div>
-            <div className="stat-label-small">进行中干预</div>
+            <div className="stat-value-small">{stats.interventions.pendingStudent}</div>
+            <div className="stat-label-small">待处理干预</div>
+          </div>
+        </div>
+        <div className="stat-card-small">
+          <div className="stat-icon-small">📨</div>
+          <div className="stat-content-small">
+            <div className="stat-value-small">{stats.interventions.pendingReview}</div>
+            <div className="stat-label-small">审核中干预</div>
           </div>
         </div>
       </div>
@@ -340,41 +365,102 @@ export default function LearningRecords() {
             </div>
           ) : (
             <div className="interventions-list">
-              {interventions.map((intervention) => (
-                <div key={intervention._id} className="intervention-card">
-                  <div className="intervention-header">
-                    <div className="intervention-student">
-                      <strong>{intervention.type}</strong>
+              {interventions.map((intervention) => {
+                const st = canonicalInterventionStatusClient(intervention.status)
+                return (
+                  <div key={intervention._id} className="intervention-card">
+                    <div className="intervention-header">
+                      <div className="intervention-student">
+                        <strong>{intervention.type}</strong>
+                      </div>
+                      <span className={`status-badge ${getInterventionStatusClass(intervention.status)}`}>
+                        {interventionStatusLabel(intervention.status)}
+                      </span>
                     </div>
-                    <span className={`status-badge ${getInterventionStatusClass(intervention.status)}`}>
-                      {getInterventionStatusText(intervention.status)}
-                    </span>
+                    <div className="intervention-content">
+                      <p>{intervention.description}</p>
+                      {st === 'pending_review' || st === 'completed' ? (
+                        <>
+                          {intervention.notes ? (
+                            <div className="intervention-plan">
+                              <strong>我的完成情况：</strong>
+                              <span>{intervention.notes}</span>
+                            </div>
+                          ) : null}
+                          {intervention.submittedAt ? (
+                            <div className="intervention-assigned">
+                              <strong>提交时间：</strong>
+                              <span>{new Date(intervention.submittedAt).toLocaleString('zh-CN')}</span>
+                            </div>
+                          ) : null}
+                        </>
+                      ) : null}
+                      {st === 'completed' && intervention.reviewResult ? (
+                        <div className="intervention-plan">
+                          <strong>审核结果：</strong>
+                          <span>{intervention.reviewResult === 'pass' ? '通过' : '不通过'}</span>
+                          {intervention.reviewOpinion ? (
+                            <span style={{ marginLeft: 8 }}>（{intervention.reviewOpinion}）</span>
+                          ) : null}
+                        </div>
+                      ) : null}
+                      {st === 'revoked' && intervention.revokedAt ? (
+                        <div className="intervention-assigned">
+                          <strong>撤销时间：</strong>
+                          <span>{new Date(intervention.revokedAt).toLocaleString('zh-CN')}</span>
+                        </div>
+                      ) : null}
+                      {intervention.plan && (
+                        <div className="intervention-plan">
+                          <strong>干预计划：</strong>
+                          <span>{intervention.plan}</span>
+                        </div>
+                      )}
+                      {intervention.assignedToName && (
+                        <div className="intervention-assigned">
+                          <strong>负责人：</strong>
+                          <span>{intervention.assignedToName}</span>
+                        </div>
+                      )}
+                      {st === 'student_pending' ? (
+                        <div style={{ marginTop: 12 }}>
+                          <label style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>
+                            完成情况说明（提交后进入待审核）
+                          </label>
+                          <textarea
+                            className="warning-textarea"
+                            style={{ width: '100%', minHeight: 72 }}
+                            defaultValue={intervention.notes || ''}
+                            id={`intervention-notes-${intervention._id}`}
+                          />
+                          <button
+                            type="button"
+                            className="btn-primary btn-small"
+                            style={{ marginTop: 8 }}
+                            disabled={interventionSubmittingId === intervention._id}
+                            onClick={() => {
+                              const el = document.getElementById(
+                                `intervention-notes-${intervention._id}`
+                              ) as HTMLTextAreaElement | null
+                              submitInterventionReview(intervention, el?.value || '')
+                            }}
+                          >
+                            {interventionSubmittingId === intervention._id ? '提交中…' : '提交审核'}
+                          </button>
+                        </div>
+                      ) : null}
+                    </div>
+                    <div className="intervention-footer">
+                      <span className="intervention-time">
+                        {new Date(intervention.createdAt).toLocaleDateString('zh-CN')}
+                      </span>
+                      {intervention.blockHash && (
+                        <span className="blockchain-badge">⛓️ 已上链</span>
+                      )}
+                    </div>
                   </div>
-                  <div className="intervention-content">
-                    <p>{intervention.description}</p>
-                    {intervention.plan && (
-                      <div className="intervention-plan">
-                        <strong>干预计划：</strong>
-                        <span>{intervention.plan}</span>
-                      </div>
-                    )}
-                    {intervention.assignedToName && (
-                      <div className="intervention-assigned">
-                        <strong>负责人：</strong>
-                        <span>{intervention.assignedToName}</span>
-                      </div>
-                    )}
-                  </div>
-                  <div className="intervention-footer">
-                    <span className="intervention-time">
-                      {new Date(intervention.createdAt).toLocaleDateString('zh-CN')}
-                    </span>
-                    {intervention.blockHash && (
-                      <span className="blockchain-badge">⛓️ 已上链</span>
-                    )}
-                  </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
           )}
         </div>

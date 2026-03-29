@@ -6,6 +6,7 @@ import User from '@/models/User'
 import Grade from '@/models/Grade'
 import Attendance from '@/models/Attendance'
 import { verifyToken } from '@/lib/jwt'
+import { canonicalInterventionStatus } from '@/lib/interventionStatus'
 
 export async function OPTIONS() {
   return new NextResponse(null, {
@@ -65,15 +66,23 @@ export async function GET(request: Request) {
       }).length,
     }
 
-    // 干预统计
+    // 干预统计（状态统一为：待学生处理 / 待审核 / 已完成 / 已撤销）
+    const interventionByStatus = {
+      student_pending: 0,
+      pending_review: 0,
+      completed: 0,
+      revoked: 0,
+    }
+    interventions.forEach((i) => {
+      const c = canonicalInterventionStatus(i.status as string)
+      if (c in interventionByStatus) {
+        interventionByStatus[c as keyof typeof interventionByStatus]++
+      }
+    })
+
     const interventionStats = {
       total: interventions.length,
-      byStatus: {
-        pending: interventions.filter((i) => i.status === 'pending').length,
-        'in-progress': interventions.filter((i) => i.status === 'in-progress').length,
-        completed: interventions.filter((i) => i.status === 'completed').length,
-        cancelled: interventions.filter((i) => i.status === 'cancelled').length,
-      },
+      byStatus: interventionByStatus,
       byType: {} as Record<string, number>,
       recent30Days: interventions.filter((i) => {
         const date = new Date(i.createdAt)
@@ -103,11 +112,41 @@ export async function GET(request: Request) {
       withoutWarnings: students.length - withWarningsCount,
     }
 
-    // 成绩统计
+    // 成绩统计（汇总 + 按课程维度）
     const below60Count = grades.filter((g) => g.score < 60).length
     const above60Count = grades.filter((g) => g.score >= 60).length
     const courses = [...new Set(grades.map((g) => g.course))]
     const terms = [...new Set(grades.map((g) => g.term))]
+
+    const byCourseMap = new Map<
+      string,
+      { sum: number; count: number; below60: number }
+    >()
+    grades.forEach((g) => {
+      const name = g.course || '（未命名课程）'
+      let row = byCourseMap.get(name)
+      if (!row) {
+        row = { sum: 0, count: 0, below60: 0 }
+        byCourseMap.set(name, row)
+      }
+      row.sum += g.score
+      row.count += 1
+      if (g.score < 60) row.below60 += 1
+    })
+    const byCourse = Array.from(byCourseMap.entries())
+      .map(([course, { sum, count, below60 }]) => {
+        const average = count > 0 ? sum / count : 0
+        const passRate = count > 0 ? ((count - below60) / count) * 100 : 0
+        return {
+          course,
+          recordCount: count,
+          average: Math.round(average * 10) / 10,
+          below60,
+          passRate: Math.round(passRate * 10) / 10,
+        }
+      })
+      .sort((a, b) => a.course.localeCompare(b.course, 'zh-CN'))
+
     const gradeStats = {
       total: grades.length,
       average: grades.length > 0 ? grades.reduce((sum, g) => sum + g.score, 0) / grades.length : 0,
@@ -117,6 +156,7 @@ export async function GET(request: Request) {
       passRate: grades.length > 0 ? (above60Count / grades.length) * 100 : 0,
       courseCount: courses.length,
       termCount: terms.length,
+      byCourse,
     }
 
     // 出勤统计

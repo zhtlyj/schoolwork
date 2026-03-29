@@ -5,6 +5,7 @@ import User from '@/models/User'
 import Warning from '@/models/Warning'
 import OperationLog from '@/models/OperationLog'
 import { verifyToken } from '@/lib/jwt'
+import { serializeIntervention } from '@/lib/interventionStatus'
 
 export async function OPTIONS() {
   return new NextResponse(null, {
@@ -49,7 +50,16 @@ export async function GET(request: Request) {
     }
 
     if (status) {
-      query.status = status
+      const qStatus = status as string
+      if (qStatus === 'student_pending') {
+        query.status = { $in: ['student_pending', 'pending'] }
+      } else if (qStatus === 'pending_review') {
+        query.status = { $in: ['pending_review', 'in-progress'] }
+      } else if (qStatus === 'revoked') {
+        query.status = { $in: ['revoked', 'cancelled'] }
+      } else {
+        query.status = qStatus
+      }
     }
 
     if (type) {
@@ -68,8 +78,12 @@ export async function GET(request: Request) {
     // 获取总数
     const total = await Intervention.countDocuments(query)
 
+    const serialized = interventions.map((i) =>
+      serializeIntervention(i.toObject ? i.toObject() : i)
+    )
+
     return NextResponse.json({
-      interventions,
+      interventions: serialized,
       pagination: {
         page,
         limit,
@@ -163,7 +177,7 @@ export async function POST(request: Request) {
       studentName: student.name,
       warningId: warningId || undefined,
       type,
-      status: 'pending',
+      status: 'student_pending',
       description,
       plan: plan || undefined,
       startDate: startDate ? new Date(startDate) : undefined,
@@ -186,10 +200,11 @@ export async function POST(request: Request) {
       details: `${creator.name}为${student.name}创建了${type}干预`,
     })
 
+    const createdPlain = intervention.toObject ? intervention.toObject() : intervention
     return NextResponse.json(
       {
         message: '创建干预成功',
-        intervention,
+        intervention: serializeIntervention(createdPlain),
       },
       { status: 201 }
     )

@@ -11,6 +11,11 @@ import LearningRecords from '../components/LearningRecords'
 import UserProfile from '../components/UserProfile'
 import { warningService, Warning } from '../services/warnings'
 import { operationLogService, OperationLog } from '../services/operationLogs'
+import { ACADEMIC_INTEGRITY_ANCHOR_ADDRESS } from '../contracts/academicIntegrityAnchor'
+import { TARGET_CHAIN_ID } from '../contexts/WalletContext'
+import WalletBar from '../components/WalletBar'
+import ChainTransactionHistory from '../components/ChainTransactionHistory'
+import { verifyContractCodeOnChain } from '../services/blockchainContract'
 import './Home.css'
 
 
@@ -40,7 +45,7 @@ export default function Home() {
   
   const [interventionSettings, setInterventionSettings] = useState({
     autoIntervention: false,
-    interventionTypes: ['学习辅导', '出勤提醒', '家长沟通', '心理辅导'],
+    interventionTypes: ['学习辅导', '心理疏导', '纪律教育', '考勤督促'],
     defaultDuration: 30,
   })
   
@@ -48,8 +53,10 @@ export default function Home() {
     enableBlockchain: true,
     autoUpload: true,
     network: 'testnet',
-    contractAddress: '0x1234567890abcdef',
+    contractAddress: ACADEMIC_INTEGRITY_ANCHOR_ADDRESS || '',
   })
+
+  const [chainVerifyMsg, setChainVerifyMsg] = useState<string | null>(null)
   
   const [systemSettings, setSystemSettings] = useState({
     systemName: '学生学业预警与学习干预系统',
@@ -126,10 +133,10 @@ export default function Home() {
           <div className="header-left">
             <h1 className="system-title">
               <span className="blockchain-icon">⛓️</span>
-              学生学业预警与学习干预系统
+              <span className="system-title-text">学生学业预警与学习干预系统</span>
             </h1>
           </div>
-          <nav className="header-nav">
+          <nav className="header-nav" aria-label="主导航">
             {user?.role === 'student' ? (
               <>
                 <button
@@ -165,6 +172,13 @@ export default function Home() {
                 >
                   <span className="nav-icon">📚</span>
                   学习记录
+                </button>
+                <button
+                  className={`nav-item ${activeNav === 'chainHistory' ? 'active' : ''}`}
+                  onClick={() => setActiveNav('chainHistory')}
+                >
+                  <span className="nav-icon">📜</span>
+                  交易历史
                 </button>
                 <button
                   className={`nav-item ${activeNav === 'profile' ? 'active' : ''}`}
@@ -221,6 +235,13 @@ export default function Home() {
                   数据统计
                 </button>
                 <button
+                  className={`nav-item ${activeNav === 'chainHistory' ? 'active' : ''}`}
+                  onClick={() => setActiveNav('chainHistory')}
+                >
+                  <span className="nav-icon">📜</span>
+                  交易历史
+                </button>
+                <button
                   className={`nav-item ${activeNav === 'settings' ? 'active' : ''}`}
                   onClick={() => setActiveNav('settings')}
                 >
@@ -231,6 +252,7 @@ export default function Home() {
             )}
           </nav>
           <div className="header-right">
+            <WalletBar />
             <div
               className="user-profile"
               onClick={() => setShowUserMenu(!showUserMenu)}
@@ -243,8 +265,8 @@ export default function Home() {
                   {user?.role === 'staff' && '👨‍🏫 教职工'}
                   {user?.role === 'admin' && '👑 管理员'}
                 </span>
-                {user?.studentId && <span className="user-id">学号: {user.studentId}</span>}
-                {user?.staffId && <span className="user-id">工号: {user.staffId}</span>}
+                {user?.studentId && <span className="user-id user-id--header">学号: {user.studentId}</span>}
+                {user?.staffId && <span className="user-id user-id--header">工号: {user.staffId}</span>}
               </div>
               {showUserMenu && (
                 <div className="user-menu-dropdown">
@@ -271,47 +293,51 @@ export default function Home() {
 
       <main className="home-main">
         <div className="dashboard">
-          <div className="stats-grid stats-filter-grid">
-            <button
-              type="button"
-              className={`stat-card stat-filter-card ${warningTypeFilter === 'grade' ? 'active' : ''}`}
-              onClick={() => setWarningTypeFilter((v) => (v === 'grade' ? '' : 'grade'))}
-            >
-              <div className="stat-icon">📝</div>
-              <div className="stat-content">
-                <div className="stat-value">
-                  {warningsLoading ? '...' : warnings.filter((w) => w.type === 'grade').length}
+          {/* 预警类型快捷筛选：仅在「预警」相关入口展示，不在干预管理等页面展示 */}
+          {(activeNav === 'warnings' ||
+            (activeNav === 'dashboard' && activeTab === 'warnings')) && (
+            <div className="stats-grid stats-filter-grid">
+              <button
+                type="button"
+                className={`stat-card stat-filter-card ${warningTypeFilter === 'grade' ? 'active' : ''}`}
+                onClick={() => setWarningTypeFilter((v) => (v === 'grade' ? '' : 'grade'))}
+              >
+                <div className="stat-icon">📝</div>
+                <div className="stat-content">
+                  <div className="stat-value">
+                    {warningsLoading ? '...' : warnings.filter((w) => w.type === 'grade').length}
+                  </div>
+                  <div className="stat-label">成绩预警</div>
                 </div>
-                <div className="stat-label">成绩预警</div>
-              </div>
-            </button>
-            <button
-              type="button"
-              className={`stat-card stat-filter-card ${warningTypeFilter === 'credit_semester' ? 'active' : ''}`}
-              onClick={() => setWarningTypeFilter((v) => (v === 'credit_semester' ? '' : 'credit_semester'))}
-            >
-              <div className="stat-icon">📚</div>
-              <div className="stat-content">
-                <div className="stat-value">
-                  {warningsLoading ? '...' : warnings.filter((w) => w.type === 'credit_semester').length}
+              </button>
+              <button
+                type="button"
+                className={`stat-card stat-filter-card ${warningTypeFilter === 'credit_semester' ? 'active' : ''}`}
+                onClick={() => setWarningTypeFilter((v) => (v === 'credit_semester' ? '' : 'credit_semester'))}
+              >
+                <div className="stat-icon">📚</div>
+                <div className="stat-content">
+                  <div className="stat-value">
+                    {warningsLoading ? '...' : warnings.filter((w) => w.type === 'credit_semester').length}
+                  </div>
+                  <div className="stat-label">学期学分预警</div>
                 </div>
-                <div className="stat-label">学期学分预警</div>
-              </div>
-            </button>
-            <button
-              type="button"
-              className={`stat-card stat-filter-card ${warningTypeFilter === 'credit_total' ? 'active' : ''}`}
-              onClick={() => setWarningTypeFilter((v) => (v === 'credit_total' ? '' : 'credit_total'))}
-            >
-              <div className="stat-icon">📊</div>
-              <div className="stat-content">
-                <div className="stat-value">
-                  {warningsLoading ? '...' : warnings.filter((w) => w.type === 'credit_total').length}
+              </button>
+              <button
+                type="button"
+                className={`stat-card stat-filter-card ${warningTypeFilter === 'credit_total' ? 'active' : ''}`}
+                onClick={() => setWarningTypeFilter((v) => (v === 'credit_total' ? '' : 'credit_total'))}
+              >
+                <div className="stat-icon">📊</div>
+                <div className="stat-content">
+                  <div className="stat-value">
+                    {warningsLoading ? '...' : warnings.filter((w) => w.type === 'credit_total').length}
+                  </div>
+                  <div className="stat-label">总学分预警</div>
                 </div>
-                <div className="stat-label">总学分预警</div>
-              </div>
-            </button>
-          </div>
+              </button>
+            </div>
+          )}
 
           {activeNav === 'dashboard' && (
             <div className="content-tabs">
@@ -337,6 +363,8 @@ export default function Home() {
           )}
 
           <div className="tab-content">
+            {activeNav === 'chainHistory' && <ChainTransactionHistory />}
+
             {activeNav === 'dashboard' && activeTab === 'overview' && (
               <div className="overview-section">
                 <div className="section-card">
@@ -764,7 +792,34 @@ export default function Home() {
                             disabled={!blockchainSettings.enableBlockchain}
                             placeholder="0x..."
                           />
-                          <p className="form-hint">数据存储智能合约的地址</p>
+                          <p className="form-hint">数据存储智能合约的地址（可与下方 .env 中配置保持一致）</p>
+                        </div>
+
+                        <div className="form-group">
+                          <label>前端环境变量（Vite）</label>
+                          <p className="form-hint" style={{ wordBreak: 'break-all' }}>
+                            VITE_ACADEMIC_INTEGRITY_ANCHOR_ADDRESS：
+                            {ACADEMIC_INTEGRITY_ANCHOR_ADDRESS || '未配置'}
+                          </p>
+                          <p className="form-hint">
+                            目标链 VITE_CHAIN_ID：{TARGET_CHAIN_ID.toString()}（Sepolia 为 11155111，本地 Hardhat 为 31337）
+                          </p>
+                          <button
+                            type="button"
+                            className="btn-secondary"
+                            onClick={() => {
+                              void verifyContractCodeOnChain().then((r) =>
+                                setChainVerifyMsg(`${r.ok ? '✓' : '✗'} ${r.message}`)
+                              )
+                            }}
+                          >
+                            验证当前网络下合约代码
+                          </button>
+                          {chainVerifyMsg && (
+                            <p className="form-hint" style={{ marginTop: 8 }}>
+                              {chainVerifyMsg}
+                            </p>
+                          )}
                         </div>
 
                         <div className="form-actions">

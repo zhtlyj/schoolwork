@@ -56,6 +56,22 @@ export default function StatisticsDashboard() {
   const maxValue =
     Math.max(...statistics.trends.warnings, ...statistics.trends.interventions, 1) || 1
 
+  /** 折线图坐标（SVG viewBox 内像素） */
+  const chartW = 720
+  const chartH = 260
+  const pad = { t: 28, r: 32, b: 48, l: 46 }
+  const plotW = chartW - pad.l - pad.r
+  const plotH = chartH - pad.t - pad.b
+  const n = statistics.trends.dates.length
+  const xAt = (i: number) =>
+    n <= 1 ? pad.l + plotW / 2 : pad.l + (i / Math.max(n - 1, 1)) * plotW
+  const yAt = (v: number) => pad.t + plotH - (v / maxValue) * plotH
+
+  const warningPoints = statistics.trends.warnings.map((v, i) => `${xAt(i)},${yAt(v)}`).join(' ')
+  const interventionPoints = statistics.trends.interventions
+    .map((v, i) => `${xAt(i)},${yAt(v)}`)
+    .join(' ')
+
   return (
     <div className="page-content">
       <div className="statistics-header">
@@ -157,10 +173,10 @@ export default function StatisticsDashboard() {
             <div className="stat-item">
               <span className="stat-item-label">按状态：</span>
               <div className="stat-item-values stat-values-inline">
-                <span>待处理 {statistics.intervention.byStatus.pending}</span>
-                <span>进行中 {statistics.intervention.byStatus['in-progress']}</span>
+                <span>待学生处理 {statistics.intervention.byStatus.student_pending}</span>
+                <span>待审核 {statistics.intervention.byStatus.pending_review}</span>
                 <span>已完成 {statistics.intervention.byStatus.completed}</span>
-                <span>已取消 {statistics.intervention.byStatus.cancelled}</span>
+                <span>已撤销 {statistics.intervention.byStatus.revoked}</span>
               </div>
             </div>
             {Object.keys(statistics.intervention.byType).length > 0 && (
@@ -204,26 +220,53 @@ export default function StatisticsDashboard() {
         </div>
 
         {/* 成绩统计 */}
-        <div className="statistics-card">
+        <div className="statistics-card statistics-card-grade">
           <h3 className="statistics-title">📝 成绩统计</h3>
           <div className="statistics-content">
             <div className="stat-item">
-              <span className="stat-item-label">平均分：</span>
-              <span className="stat-item-value">{statistics.grade.average.toFixed(1)} 分</span>
+              <span className="stat-item-label">总体概况</span>
+              <div className="stat-item-values stat-values-inline">
+                <span>全部 {statistics.grade.total} 条</span>
+                <span>均分 {statistics.grade.average.toFixed(1)}</span>
+                <span>及格率 {(statistics.grade.passRate ?? 0).toFixed(1)}%</span>
+                <span>
+                  不及格 {statistics.grade.below60}（{statistics.grade.below60Percent.toFixed(1)}%）
+                </span>
+                <span>
+                  {statistics.grade.courseCount ?? 0} 门课程 / {statistics.grade.termCount ?? 0} 个学期
+                </span>
+              </div>
             </div>
             <div className="stat-item">
-              <span className="stat-item-label">及格率：</span>
-              <span className="stat-item-value">
-                {(statistics.grade.passRate ?? (statistics.grade.total > 0 ? ((statistics.grade.total - statistics.grade.below60) / statistics.grade.total) * 100 : 0)).toFixed(1)}%
-              </span>
-            </div>
-            <div className="stat-item">
-              <span className="stat-item-label">不及格：</span>
-              <span className="stat-item-value">{statistics.grade.below60} 条（{statistics.grade.below60Percent.toFixed(1)}%）</span>
-            </div>
-            <div className="stat-item">
-              <span className="stat-item-label">课程/学期：</span>
-              <span className="stat-item-value">{statistics.grade.courseCount ?? '-'} 门 / {statistics.grade.termCount ?? '-'} 个学期</span>
+              <span className="stat-item-label">按课程</span>
+              {statistics.grade.byCourse && statistics.grade.byCourse.length > 0 ? (
+                <div className="statistics-grade-table-wrap">
+                  <table className="statistics-grade-table">
+                    <thead>
+                      <tr>
+                        <th>课程</th>
+                        <th>成绩条数</th>
+                        <th>平均分</th>
+                        <th>及格率</th>
+                        <th>不及格</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {statistics.grade.byCourse.map((row) => (
+                        <tr key={row.course}>
+                          <td className="statistics-grade-course">{row.course}</td>
+                          <td>{row.recordCount}</td>
+                          <td>{row.average.toFixed(1)}</td>
+                          <td>{row.passRate.toFixed(1)}%</td>
+                          <td>{row.below60}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="statistics-grade-empty">暂无成绩记录</p>
+              )}
             </div>
           </div>
         </div>
@@ -251,56 +294,82 @@ export default function StatisticsDashboard() {
         <div className="statistics-card" style={{ gridColumn: '1 / -1' }}>
           <h3 className="statistics-title">📈 趋势分析（最近7天）</h3>
           <div className="statistics-content">
-            <div className="trend-chart">
-              <div className="trend-bars">
-                {statistics.trends.dates.map((date, idx) => {
-                  const warningHeight = (statistics.trends.warnings[idx] / maxValue) * 100
-                  const interventionHeight =
-                    (statistics.trends.interventions[idx] / maxValue) * 100
-                  const dateLabel = new Date(date).toLocaleDateString('zh-CN', {
-                    month: 'short',
-                    day: 'numeric',
-                  })
-
-                  return (
-                    <div key={date} className="trend-bar-group">
-                      <div className="trend-bar-container">
-                        <div
-                          className="trend-bar trend-bar-warning"
-                          style={{ height: `${warningHeight}%` }}
-                          title={`预警: ${statistics.trends.warnings[idx]}`}
-                        >
-                          {statistics.trends.warnings[idx] > 0 && (
-                            <span className="trend-bar-value">
-                              {statistics.trends.warnings[idx]}
-                            </span>
-                          )}
-                        </div>
-                        <div
-                          className="trend-bar trend-bar-intervention"
-                          style={{ height: `${interventionHeight}%` }}
-                          title={`干预: ${statistics.trends.interventions[idx]}`}
-                        >
-                          {statistics.trends.interventions[idx] > 0 && (
-                            <span className="trend-bar-value">
-                              {statistics.trends.interventions[idx]}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                      <div className="trend-bar-label">{dateLabel}</div>
-                    </div>
-                  )
-                })}
+            <div className="trend-chart trend-line-chart">
+              <div className="trend-line-wrap">
+                <svg
+                  className="trend-line-svg"
+                  viewBox={`0 0 ${chartW} ${chartH}`}
+                  preserveAspectRatio="xMidYMid meet"
+                  role="img"
+                  aria-label="最近7天预警与干预条数折线图"
+                >
+                  {/* 横向参考线 */}
+                  {[0, 0.25, 0.5, 0.75, 1].map((t) => {
+                    const y = pad.t + plotH * (1 - t)
+                    return (
+                      <line
+                        key={t}
+                        x1={pad.l}
+                        y1={y}
+                        x2={pad.l + plotW}
+                        y2={y}
+                        className="trend-line-grid"
+                      />
+                    )
+                  })}
+                  {/* Y 轴刻度 */}
+                  <text x={pad.l - 8} y={pad.t + plotH + 4} textAnchor="end" className="trend-line-axis">
+                    0
+                  </text>
+                  <text x={pad.l - 8} y={pad.t + 12} textAnchor="end" className="trend-line-axis">
+                    {maxValue}
+                  </text>
+                  <polyline
+                    fill="none"
+                    stroke="#667eea"
+                    strokeWidth="2.75"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    points={warningPoints}
+                  />
+                  <polyline
+                    fill="none"
+                    stroke="#f5576c"
+                    strokeWidth="2.75"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    points={interventionPoints}
+                  />
+                  {statistics.trends.dates.map((date, i) => {
+                    const wx = xAt(i)
+                    const wy = yAt(statistics.trends.warnings[i])
+                    const ix = xAt(i)
+                    const iy = yAt(statistics.trends.interventions[i])
+                    const dayLabel = new Date(date).toLocaleDateString('zh-CN', {
+                      month: 'numeric',
+                      day: 'numeric',
+                    })
+                    return (
+                      <g key={date} className="trend-line-day-group">
+                        <title>{`${dayLabel} 预警 ${statistics.trends.warnings[i]}，干预 ${statistics.trends.interventions[i]}`}</title>
+                        <circle cx={wx} cy={wy} r="5" fill="#fff" stroke="#667eea" strokeWidth="2" />
+                        <circle cx={ix} cy={iy} r="5" fill="#fff" stroke="#f5576c" strokeWidth="2" />
+                        <text x={wx} y={chartH - 14} textAnchor="middle" className="trend-line-xlabel">
+                          {dayLabel}
+                        </text>
+                      </g>
+                    )
+                  })}
+                </svg>
               </div>
               <div className="trend-legend">
                 <div className="legend-item">
-                  <span className="legend-color" style={{ background: '#667eea' }}></span>
-                  <span>预警</span>
+                  <span className="legend-color trend-legend-line trend-legend-line--warning" />
+                  <span>预警（新建条数）</span>
                 </div>
                 <div className="legend-item">
-                  <span className="legend-color" style={{ background: '#f5576c' }}></span>
-                  <span>干预</span>
+                  <span className="legend-color trend-legend-line trend-legend-line--intervention" />
+                  <span>干预（新建条数）</span>
                 </div>
               </div>
             </div>

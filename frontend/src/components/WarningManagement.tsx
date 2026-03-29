@@ -1,7 +1,12 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import { warningService, Warning, CreateWarningData, WarningCandidate, ManagementListItem } from '../services/warnings'
 import { studentService, Student } from '../services/students'
 import { gradeService } from '../services/grades'
+import {
+  anchorWarningOnChain,
+  explorerTxUrl,
+  logWarningCancellationOnChain,
+} from '../services/warningChain'
 import '../pages/Home.css'
 
 export interface WarningSettings {
@@ -21,6 +26,23 @@ interface WarningManagementProps {
   typeFilter?: '' | 'grade' | 'credit_semester' | 'credit_total'
   onTypeFilterChange?: (v: '' | 'grade' | 'credit_semester' | 'credit_total') => void
 }
+
+type CandidateGradeRow = WarningCandidate['gradeWarnings'][number]
+
+function gradeCandidateKey(studentId: string, gw: CandidateGradeRow) {
+  return `g:${studentId}:${gw.course}:${gw.term}:${gw.examType}`
+}
+
+function creditSemCandidateKey(studentId: string, term: string) {
+  return `cs:${studentId}:${term}`
+}
+
+function creditTotalCandidateKey(studentId: string) {
+  return `ct:${studentId}`
+}
+
+/** 取消预警：快捷默认原因（可点选填入，也可在输入框中任意修改） */
+const CANCEL_WARNING_REASON_PRESETS = ['已经通过补考', '已经重修合格', '预警录入错误'] as const
 
 // 预警管理组件（教职工/管理员：对学生下发预警 + 列表筛选 + 删除 + 一键生成）
 export default function WarningManagement({
@@ -59,6 +81,9 @@ export default function WarningManagement({
   const [studentDropdownOpen, setStudentDropdownOpen] = useState(false)
 
   const [showCreateModal, setShowCreateModal] = useState(false)
+  const [cancelModal, setCancelModal] = useState<{ _id: string; studentName: string } | null>(null)
+  const [cancelReason, setCancelReason] = useState('')
+  const [cancelSubmitError, setCancelSubmitError] = useState('')
   const [editingWarningId, setEditingWarningId] = useState<string | null>(null)
   const [createData, setCreateData] = useState<CreateWarningData>({
     studentId: '',
@@ -71,10 +96,29 @@ export default function WarningManagement({
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
 
-  // 成功提示自动消失
+  /** 新建预警后是否用 MetaMask 调合约 anchorWarning */
+  const [syncChainAfterIssue, setSyncChainAfterIssue] = useState(true)
+  const [chainBusy, setChainBusy] = useState(false)
+  const [cancelChainBusy, setCancelChainBusy] = useState(false)
+  const [anchoringWarningId, setAnchoringWarningId] = useState<string | null>(null)
+
+  // 成功提示自动消失：成功下发、取消预警 1 秒；其余（如无可下发项提示）3 秒
   useEffect(() => {
     if (!success) return
-    const timer = setTimeout(() => setSuccess(''), 3000)
+    const isIssueOrCancelSuccess =
+      success === '已取消预警' ||
+      success === '已经下发预警' ||
+      success === '已成功下发预警' ||
+      success.startsWith('已成功一键下发') ||
+      success === '已成功下发成绩预警' ||
+      success === '已成功下发学分预警' ||
+      success === '已成功下发预警并已链上存证' ||
+      success === '已成功下发成绩预警并已链上存证' ||
+      success === '已成功下发学分预警并已链上存证' ||
+      success === '链上存证成功' ||
+      success === '已取消预警并已链上记录'
+    const duration = isIssueOrCancelSuccess ? 1000 : 3000
+    const timer = setTimeout(() => setSuccess(''), duration)
     return () => clearTimeout(timer)
   }, [success])
 
@@ -221,9 +265,24 @@ export default function WarningManagement({
         setEditingWarningId(null)
         setSuccess('已经下发预警')
       } else {
-        await warningService.createWarning(createData)
-        setShowCreateModal(false)
-        setSuccess('已成功下发预警')
+        const { warning } = await warningService.createWarning(createData)
+        if (syncChainAfterIssue) {
+          setChainBusy(true)
+          try {
+            const txHash = await anchorWarningOnChain(warning)
+            await warningService.updateWarning(warning._id, { blockHash: txHash })
+            setShowCreateModal(false)
+            setSuccess('已成功下发预警并已链上存证')
+          } catch (ce: unknown) {
+            setError(ce instanceof Error ? ce.message : 'MetaMask 上链失败，预警已保存')
+            setShowCreateModal(false)
+          } finally {
+            setChainBusy(false)
+          }
+        } else {
+          setShowCreateModal(false)
+          setSuccess('已成功下发预警')
+        }
       }
       setPage(1)
       fetchManagementList()
@@ -232,23 +291,107 @@ export default function WarningManagement({
     }
   }
 
-  const handleCancelWarning = async (w: { _id: string; studentName: string }) => {
+  const handleAnchorExistingWarning = async (issuedId: string) => {
     setError('')
     setSuccess('')
-    const ok = window.confirm(`确定取消对【${w.studentName}】的预警吗？此操作不可恢复。`)
-    if (!ok) return
+    setAnchoringWarningId(issuedId)
     try {
-      await warningService.deleteWarning(w._id)
-      setSuccess('已取消预警')
+      const { warning } = await warningService.getWarningById(issuedId)
+      const txHash = await anchorWarningOnChain(warning)
+      await warningService.updateWarning(issuedId, { blockHash: txHash })
+      setSuccess('链上存证成功')
+      fetchManagementList()
+    } catch (ce: unknown) {
+      setError(ce instanceof Error ? ce.message : '链上存证失败')
+    } finally {
+      setAnchoringWarningId(null)
+    }
+  }
+
+  const chainStatusCell = (w: ManagementListItem) => (
+    <td className="warning-chain-cell">
+      {!w.issuedWarningId ? (
+        '—'
+      ) : w.blockHash ? (
+        explorerTxUrl(w.blockHash) ? (
+          <a
+            href={explorerTxUrl(w.blockHash)!}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="warning-tx-link"
+          >
+            已存证
+          </a>
+        ) : (
+          <span title={w.blockHash} className="warning-tx-hash">
+            {w.blockHash.slice(0, 10)}…
+          </span>
+        )
+      ) : (
+        <button
+          type="button"
+          className="btn-secondary btn-small"
+          disabled={anchoringWarningId !== null}
+          onClick={() => w.issuedWarningId && handleAnchorExistingWarning(w.issuedWarningId)}
+        >
+          {anchoringWarningId === w.issuedWarningId ? '上链中…' : '上链存证'}
+        </button>
+      )}
+    </td>
+  )
+
+  const openCancelWarningModal = (w: { _id: string; studentName: string }) => {
+    setError('')
+    setSuccess('')
+    setCancelSubmitError('')
+    setCancelModal(w)
+    setCancelReason(CANCEL_WARNING_REASON_PRESETS[0])
+  }
+
+  const closeCancelWarningModal = () => {
+    setCancelModal(null)
+    setCancelReason('')
+    setCancelSubmitError('')
+  }
+
+  const handleConfirmCancelWarning = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!cancelModal) return
+    const reason = cancelReason.trim()
+    if (!reason) {
+      setCancelSubmitError('请填写取消原因')
+      return
+    }
+    setCancelSubmitError('')
+    try {
+      if (syncChainAfterIssue) {
+        setCancelChainBusy(true)
+        try {
+          await logWarningCancellationOnChain(cancelModal._id, reason)
+        } catch (ce: unknown) {
+          setCancelSubmitError(
+            ce instanceof Error ? ce.message : 'MetaMask 链上记录失败，未删除预警'
+          )
+          return
+        } finally {
+          setCancelChainBusy(false)
+        }
+      }
+      await warningService.deleteWarning(cancelModal._id, reason)
+      closeCancelWarningModal()
+      setSuccess(syncChainAfterIssue ? '已取消预警并已链上记录' : '已取消预警')
       fetchManagementList()
     } catch (err: any) {
-      setError(err.response?.data?.message || '取消预警失败')
+      setCancelSubmitError(err.response?.data?.message || '取消预警失败')
     }
   }
 
   // 一键生成模式：预警候选学生列表
   const [candidates, setCandidates] = useState<WarningCandidate[]>([])
   const [candidatesLoading, setCandidatesLoading] = useState(false)
+  /** 本页已点击下发成功的候选项，用于展示「已经下发」 */
+  const [issuedCandidateKeys, setIssuedCandidateKeys] = useState<Record<string, true>>({})
+  const [bulkAutoIssuing, setBulkAutoIssuing] = useState(false)
   // 在"一键生成"模式下，获取达到预警条件的学生列表（根据筛选项）
   useEffect(() => {
     const fetchCandidates = async () => {
@@ -282,26 +425,172 @@ export default function WarningManagement({
     fetchCandidates()
   }, [mode, filters.type, warningSettings])
 
-  // 一键生成：根据筛选项过滤后的候选列表（用于判断是否为空、用于渲染）
-  const filteredCandidatesForAuto = useMemo(() => {
-    return candidates.filter((c) => {
-      if (filters.studentId && c.studentId !== filters.studentId) return false
-      const showGrade = !filters.type || filters.type === 'grade'
-      const showSemester = !filters.type || filters.type === 'credit_semester'
-      const showTotal = !filters.type || filters.type === 'credit_total'
-      let gw = c.gradeWarnings
-      let sc = c.creditWarnings?.filter((x) => x.scope === 'semester') ?? []
-      let tc = c.creditWarnings?.filter((x) => x.scope === 'total') ?? []
-      if (filters.level) {
-        gw = gw.filter((g) => g.level === filters.level)
-        sc = sc.filter((x) => x.level === filters.level)
-        tc = tc.filter((x) => x.level === filters.level)
-      }
-      if (filters.course && filters.type === 'grade') gw = gw.filter((g) => g.course === filters.course)
-      if (filters.course && filters.type === 'credit_semester') sc = sc.filter((x) => x.term === filters.course)
-      return (showGrade && gw.length > 0) || (showSemester && sc.length > 0) || (showTotal && tc.length > 0)
+  const refreshCandidatesSilently = useCallback(async () => {
+    const res = await warningService.getWarningCandidates({
+      type: (filters.type || undefined) as 'grade' | 'credit_semester' | 'credit_total' | undefined,
+      gradeHigh,
+      gradeMedium,
+      gradeLow,
+      semesterHigh,
+      semesterMedium,
+      semesterLow,
+      totalHigh,
+      totalMedium,
+      totalLow,
     })
-  }, [candidates, filters.studentId, filters.type, filters.level, filters.course])
+    setCandidates(res.candidates)
+  }, [
+    filters.type,
+    gradeHigh,
+    gradeMedium,
+    gradeLow,
+    semesterHigh,
+    semesterMedium,
+    semesterLow,
+    totalHigh,
+    totalMedium,
+    totalLow,
+  ])
+
+  // 当前筛选下尚未标记为已下发的候选条目（用于一键下发）
+  const autoPendingTasks = useMemo(() => {
+    const tasks: Array<
+      | { kind: 'grade'; key: string; studentId: string; gw: CandidateGradeRow }
+      | {
+          kind: 'credit'
+          key: string
+          studentId: string
+          scope: 'semester' | 'total'
+          earnedCredits: number
+          threshold: number
+          term: string | undefined
+          level: 'high' | 'medium' | 'low'
+        }
+    > = []
+
+    for (const candidate of candidates) {
+      if (filters.studentId && candidate.studentId !== filters.studentId) continue
+
+      const showGradeWarnings = !filters.type || filters.type === 'grade'
+      const showSemesterCreditWarnings = !filters.type || filters.type === 'credit_semester'
+      const showTotalCreditWarnings = !filters.type || filters.type === 'credit_total'
+
+      let gradeWarnings = candidate.gradeWarnings
+      let semesterCredits = candidate.creditWarnings?.filter((c) => c.scope === 'semester') ?? []
+      let totalCredits = candidate.creditWarnings?.filter((c) => c.scope === 'total') ?? []
+
+      if (filters.level) {
+        gradeWarnings = gradeWarnings.filter((g) => g.level === filters.level)
+        semesterCredits = semesterCredits.filter((c) => c.level === filters.level)
+        totalCredits = totalCredits.filter((c) => c.level === filters.level)
+      }
+      if (filters.course && filters.type === 'grade') {
+        gradeWarnings = gradeWarnings.filter((g) => g.course === filters.course)
+      }
+      if (filters.course && filters.type === 'credit_semester') {
+        semesterCredits = semesterCredits.filter((c) => c.term === filters.course)
+      }
+
+      if (showGradeWarnings) {
+        for (const gw of gradeWarnings) {
+          const key = gradeCandidateKey(candidate.studentId, gw)
+          if (!issuedCandidateKeys[key]) {
+            tasks.push({ kind: 'grade', key, studentId: candidate.studentId, gw })
+          }
+        }
+      }
+      if (showSemesterCreditWarnings) {
+        for (const cw of semesterCredits) {
+          const key = creditSemCandidateKey(candidate.studentId, cw.term ?? '')
+          if (!issuedCandidateKeys[key]) {
+            tasks.push({
+              kind: 'credit',
+              key,
+              studentId: candidate.studentId,
+              scope: 'semester',
+              earnedCredits: cw.earnedCredits,
+              threshold: cw.threshold,
+              term: cw.term,
+              level: cw.level,
+            })
+          }
+        }
+      }
+      if (showTotalCreditWarnings) {
+        for (const cw of totalCredits) {
+          const key = creditTotalCandidateKey(candidate.studentId)
+          if (!issuedCandidateKeys[key]) {
+            tasks.push({
+              kind: 'credit',
+              key,
+              studentId: candidate.studentId,
+              scope: 'total',
+              earnedCredits: cw.earnedCredits,
+              threshold: cw.threshold,
+              term: cw.term,
+              level: cw.level,
+            })
+          }
+        }
+      }
+    }
+
+    return tasks
+  }, [candidates, filters.studentId, filters.type, filters.level, filters.course, issuedCandidateKeys])
+
+  const handleIssueAllAutoWarnings = async () => {
+    if (autoPendingTasks.length === 0) {
+      setError('')
+      setSuccess('当前筛选条件下没有待下发的预警')
+      return
+    }
+    if (syncChainAfterIssue) {
+      setError('')
+      setSuccess('')
+      setError('已开启「链上存证」时无法一键批量下发，请先关闭该选项或改为逐条发布。')
+      return
+    }
+    setBulkAutoIssuing(true)
+    setError('')
+    setSuccess('')
+    try {
+      for (const task of autoPendingTasks) {
+        if (task.kind === 'grade') {
+          const gw = task.gw
+          const examTypeText = gw.examType === 'final' ? '期末' : gw.examType === 'midterm' ? '期中' : '平时'
+          const threshold = gw.score < gradeHigh ? gradeHigh : gw.score < gradeMedium ? gradeMedium : gradeLow
+          const message = `课程【${gw.course}】${gw.term}${examTypeText}考试成绩为 ${gw.score} 分，低于预警阈值 ${threshold} 分，请及时关注学生学习情况。`
+          await warningService.createWarning({
+            studentId: task.studentId,
+            type: 'grade',
+            level: gw.level,
+            course: gw.course,
+            message,
+          })
+        } else {
+          const scopeText = task.scope === 'semester' ? '学期' : '累计'
+          const courseText = task.scope === 'semester' && task.term ? `（${task.term}）` : ''
+          const message = `${scopeText}学分${courseText}获得 ${task.earnedCredits} 学分，低于预警阈值 ${task.threshold} 学分，请关注学生学业进度。`
+          await warningService.createWarning({
+            studentId: task.studentId,
+            type: task.scope === 'total' ? 'credit_total' : 'credit_semester',
+            level: task.level,
+            course: task.scope === 'semester' && task.term ? task.term : '总学分',
+            message,
+          })
+        }
+        setIssuedCandidateKeys((prev) => ({ ...prev, [task.key]: true }))
+      }
+      setSuccess(`已成功一键下发 ${autoPendingTasks.length} 条预警`)
+      fetchManagementList()
+      await refreshCandidatesSilently()
+    } catch (err: any) {
+      setError(err.response?.data?.message || '一键下发失败')
+      await refreshCandidatesSilently().catch(() => {})
+    } finally {
+      setBulkAutoIssuing(false)
+    }
+  }
 
   // 从候选学生列表中下发预警
   const handleGenerateFromCandidateGrade = async (
@@ -319,28 +608,37 @@ export default function WarningManagement({
     setError('')
     setSuccess('')
     try {
-      await warningService.createWarning({
+      const { warning } = await warningService.createWarning({
         studentId,
         type: 'grade',
         level,
         course,
         message,
       })
-      setSuccess('已成功下发成绩预警')
-      fetchManagementList()
-      const res = await warningService.getWarningCandidates({
-        type: (filters.type || undefined) as any,
-        gradeHigh,
-        gradeMedium,
-        gradeLow,
-        semesterHigh,
-        semesterMedium,
-        semesterLow,
-        totalHigh,
-        totalMedium,
-        totalLow,
+      const gKey = gradeCandidateKey(studentId, {
+        course,
+        score,
+        examType,
+        term,
+        level,
       })
-      setCandidates(res.candidates)
+      setIssuedCandidateKeys((prev) => ({ ...prev, [gKey]: true }))
+      if (syncChainAfterIssue) {
+        setChainBusy(true)
+        try {
+          const txHash = await anchorWarningOnChain(warning)
+          await warningService.updateWarning(warning._id, { blockHash: txHash })
+          setSuccess('已成功下发成绩预警并已链上存证')
+        } catch (ce: unknown) {
+          setError(ce instanceof Error ? ce.message : '链上存证失败')
+        } finally {
+          setChainBusy(false)
+        }
+      } else {
+        setSuccess('已成功下发成绩预警')
+      }
+      fetchManagementList()
+      await refreshCandidatesSilently()
     } catch (err: any) {
       setError(err.response?.data?.message || '下发预警失败')
     }
@@ -361,28 +659,32 @@ export default function WarningManagement({
     setError('')
     setSuccess('')
     try {
-      await warningService.createWarning({
+      const { warning } = await warningService.createWarning({
         studentId,
         type: scope === 'total' ? 'credit_total' : 'credit_semester',
         level,
         course: scope === 'semester' && term ? term : '总学分',
         message,
       })
-      setSuccess('已成功下发学分预警')
+      const cKey =
+        scope === 'semester' ? creditSemCandidateKey(studentId, term ?? '') : creditTotalCandidateKey(studentId)
+      setIssuedCandidateKeys((prev) => ({ ...prev, [cKey]: true }))
+      if (syncChainAfterIssue) {
+        setChainBusy(true)
+        try {
+          const txHash = await anchorWarningOnChain(warning)
+          await warningService.updateWarning(warning._id, { blockHash: txHash })
+          setSuccess('已成功下发学分预警并已链上存证')
+        } catch (ce: unknown) {
+          setError(ce instanceof Error ? ce.message : '链上存证失败')
+        } finally {
+          setChainBusy(false)
+        }
+      } else {
+        setSuccess('已成功下发学分预警')
+      }
       fetchManagementList()
-      const res = await warningService.getWarningCandidates({
-        type: (filters.type || undefined) as any,
-        gradeHigh,
-        gradeMedium,
-        gradeLow,
-        semesterHigh,
-        semesterMedium,
-        semesterLow,
-        totalHigh,
-        totalMedium,
-        totalLow,
-      })
-      setCandidates(res.candidates)
+      await refreshCandidatesSilently()
     } catch (err: any) {
       setError(err.response?.data?.message || '下发预警失败')
     }
@@ -559,27 +861,39 @@ export default function WarningManagement({
           </>
       </div>
 
-      <div className="students-header">
-        <h2 className="page-title">⚠️ 预警管理</h2>
-        <div className="warning-modes">
-          <button
-            className={`warning-mode-btn ${mode === 'manual' ? 'active' : ''}`}
-            onClick={() => setMode('manual')}
-          >
-            ✍ 手动下发
-          </button>
-          <button
-            className={`warning-mode-btn ${mode === 'auto' ? 'active' : ''}`}
-            onClick={() => setMode('auto')}
-          >
-            ⚡ 一键生成
-          </button>
-          {mode === 'manual' && (
-            <button className="btn-primary" onClick={openCreate}>
-              ➕ 下发预警
+      <div className="students-header warning-management-page-header">
+        <div className="warning-management-header-top">
+          <h2 className="page-title">⚠️ 预警管理</h2>
+          <div className="warning-modes">
+            <button
+              className={`warning-mode-btn ${mode === 'manual' ? 'active' : ''}`}
+              onClick={() => setMode('manual')}
+            >
+              ✍ 手动下发
             </button>
-          )}
+            <button
+              className={`warning-mode-btn ${mode === 'auto' ? 'active' : ''}`}
+              onClick={() => setMode('auto')}
+            >
+              ⚡ 一键生成
+            </button>
+            {mode === 'manual' && (
+              <button type="button" className="btn-primary" onClick={() => openCreate()}>
+                ➕ 下发预警
+              </button>
+            )}
+          </div>
         </div>
+        <label className="warning-chain-toggle">
+          <input
+            type="checkbox"
+            checked={syncChainAfterIssue}
+            onChange={(e) => setSyncChainAfterIssue(e.target.checked)}
+          />
+          <span>
+            下发/取消预警时使用 MetaMask 上链（发布调用 anchorWarning，取消调用 logWarningCancellation；一键批量下发时需关闭此项）
+          </span>
+        </label>
       </div>
 
       {error && <div className="alert-error">{error}</div>}
@@ -599,6 +913,18 @@ export default function WarningManagement({
             <p>
               系统已根据规则自动筛选出达到预警条件的学生。成绩：高危&lt;{gradeHigh}分、中危&lt;{gradeMedium}分、低危&lt;{gradeLow}分；学期学分：高危&lt;{semesterHigh}、中危&lt;{semesterMedium}、低危&lt;{semesterLow}；总学分：高危&lt;{totalHigh}、中危&lt;{totalMedium}、低危&lt;{totalLow}。
             </p>
+            <div style={{ marginTop: 14, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12 }}>
+              <button
+                type="button"
+                className="btn-primary"
+                disabled={candidatesLoading || bulkAutoIssuing || autoPendingTasks.length === 0}
+                onClick={handleIssueAllAutoWarnings}
+              >
+                {bulkAutoIssuing
+                  ? '正在一键下发…'
+                  : `一键下发全部预警${autoPendingTasks.length > 0 ? `（${autoPendingTasks.length} 条）` : ''}`}
+              </button>
+            </div>
           </div>
 
           {candidatesLoading ? (
@@ -661,6 +987,8 @@ export default function WarningManagement({
                             {gradeWarnings.map((gw, idx) => {
                               const examTypeText =
                                 gw.examType === 'final' ? '期末' : gw.examType === 'midterm' ? '期中' : '平时'
+                              const gKey = gradeCandidateKey(candidate.studentId, gw)
+                              const gradeIssued = !!issuedCandidateKeys[gKey]
                               return (
                                 <div key={idx} className="warning-item">
                                   <div className="warning-item-info">
@@ -670,7 +998,9 @@ export default function WarningManagement({
                                     </span>
                                   </div>
                                   <button
-                                    className="btn-primary btn-small"
+                                    type="button"
+                                    className={gradeIssued ? 'btn-secondary btn-small' : 'btn-primary btn-small'}
+                                    disabled={gradeIssued || bulkAutoIssuing || chainBusy}
                                     onClick={() =>
                                       handleGenerateFromCandidateGrade(
                                         candidate.studentId,
@@ -682,7 +1012,7 @@ export default function WarningManagement({
                                       )
                                     }
                                   >
-                                    下发预警
+                                    {gradeIssued ? '已经下发' : '下发预警'}
                                   </button>
                                 </div>
                               )
@@ -697,33 +1027,39 @@ export default function WarningManagement({
                             📚 学期学分预警（{semesterCredits.length}项）
                           </h4>
                           <div className="warning-items">
-                            {semesterCredits.map((cw, idx) => (
-                              <div key={idx} className="warning-item">
-                                <div className="warning-item-info">
-                                  <span className="warning-course">
-                                    学期学分（{cw.term}）
-                                  </span>
-                                  <span className="warning-meta">
-                                    获得 {cw.earnedCredits} 学分，低于阈值 {cw.threshold} 学分
-                                  </span>
+                            {semesterCredits.map((cw, idx) => {
+                              const csKey = creditSemCandidateKey(candidate.studentId, cw.term ?? '')
+                              const semIssued = !!issuedCandidateKeys[csKey]
+                              return (
+                                <div key={idx} className="warning-item">
+                                  <div className="warning-item-info">
+                                    <span className="warning-course">
+                                      学期学分（{cw.term}）
+                                    </span>
+                                    <span className="warning-meta">
+                                      获得 {cw.earnedCredits} 学分，低于阈值 {cw.threshold} 学分
+                                    </span>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    className={semIssued ? 'btn-secondary btn-small' : 'btn-primary btn-small'}
+                                    disabled={semIssued || bulkAutoIssuing || chainBusy}
+                                    onClick={() =>
+                                      handleGenerateFromCandidateCredit(
+                                        candidate.studentId,
+                                        cw.scope,
+                                        cw.earnedCredits,
+                                        cw.threshold,
+                                        cw.term,
+                                        cw.level
+                                      )
+                                    }
+                                  >
+                                    {semIssued ? '已经下发' : '下发预警'}
+                                  </button>
                                 </div>
-                                <button
-                                  className="btn-primary btn-small"
-                                  onClick={() =>
-                                    handleGenerateFromCandidateCredit(
-                                      candidate.studentId,
-                                      cw.scope,
-                                      cw.earnedCredits,
-                                      cw.threshold,
-                                      cw.term,
-                                      cw.level
-                                    )
-                                  }
-                                >
-                                  下发预警
-                                </button>
-                              </div>
-                            ))}
+                              )
+                            })}
                           </div>
                         </div>
                       )}
@@ -734,31 +1070,37 @@ export default function WarningManagement({
                             📚 总学分预警（{totalCredits.length}项）
                           </h4>
                           <div className="warning-items">
-                            {totalCredits.map((cw, idx) => (
-                              <div key={idx} className="warning-item">
-                                <div className="warning-item-info">
-                                  <span className="warning-course">总学分</span>
-                                  <span className="warning-meta">
-                                    获得 {cw.earnedCredits} 学分，低于阈值 {cw.threshold} 学分
-                                  </span>
+                            {totalCredits.map((cw, idx) => {
+                              const ctKey = creditTotalCandidateKey(candidate.studentId)
+                              const totalIssued = !!issuedCandidateKeys[ctKey]
+                              return (
+                                <div key={idx} className="warning-item">
+                                  <div className="warning-item-info">
+                                    <span className="warning-course">总学分</span>
+                                    <span className="warning-meta">
+                                      获得 {cw.earnedCredits} 学分，低于阈值 {cw.threshold} 学分
+                                    </span>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    className={totalIssued ? 'btn-secondary btn-small' : 'btn-primary btn-small'}
+                                    disabled={totalIssued || bulkAutoIssuing || chainBusy}
+                                    onClick={() =>
+                                      handleGenerateFromCandidateCredit(
+                                        candidate.studentId,
+                                        cw.scope,
+                                        cw.earnedCredits,
+                                        cw.threshold,
+                                        cw.term,
+                                        cw.level
+                                      )
+                                    }
+                                  >
+                                    {totalIssued ? '已经下发' : '下发预警'}
+                                  </button>
                                 </div>
-                                <button
-                                  className="btn-primary btn-small"
-                                  onClick={() =>
-                                    handleGenerateFromCandidateCredit(
-                                      candidate.studentId,
-                                      cw.scope,
-                                      cw.earnedCredits,
-                                      cw.threshold,
-                                      cw.term,
-                                      cw.level
-                                    )
-                                  }
-                                >
-                                  下发预警
-                                </button>
-                              </div>
-                            ))}
+                              )
+                            })}
                           </div>
                         </div>
                       )}
@@ -839,6 +1181,7 @@ export default function WarningManagement({
                           <th>学期时间</th>
                         </>
                       )}
+                      <th>链上</th>
                       <th>操作</th>
                     </tr>
                   </thead>
@@ -927,6 +1270,7 @@ export default function WarningManagement({
                             <td>{w.term ?? '—'}</td>
                           </>
                         )}
+                        {chainStatusCell(w)}
                         <td>
                           <div className="action-buttons">
                             <button
@@ -936,7 +1280,13 @@ export default function WarningManagement({
                               {w.issuedWarningId ? '再次预警' : '发布预警'}
                             </button>
                             {w.issuedWarningId && (
-                              <button className="btn-delete" onClick={() => handleCancelWarning({ _id: w.issuedWarningId!, studentName: w.studentName })}>
+                              <button
+                                type="button"
+                                className="btn-delete"
+                                onClick={() =>
+                                  openCancelWarningModal({ _id: w.issuedWarningId!, studentName: w.studentName })
+                                }
+                              >
                                 取消预警
                               </button>
                             )}
@@ -1072,8 +1422,69 @@ export default function WarningManagement({
                 <button type="button" className="btn-secondary" onClick={() => setShowCreateModal(false)}>
                   取消
                 </button>
-                <button type="submit" className="btn-primary">
-                  发布
+                <button type="submit" className="btn-primary" disabled={chainBusy}>
+                  {chainBusy ? '上链中…' : '发布'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {cancelModal && (
+        <div className="modal-overlay" onClick={closeCancelWarningModal}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>取消预警</h3>
+              <button type="button" className="modal-close" onClick={closeCancelWarningModal}>
+                ×
+              </button>
+            </div>
+            <form onSubmit={handleConfirmCancelWarning}>
+              <p style={{ marginBottom: '16px', color: '#555', lineHeight: 1.5 }}>
+                确定取消对「{cancelModal.studentName}」的预警？此操作不可恢复。
+                {syncChainAfterIssue && (
+                  <span style={{ display: 'block', marginTop: 8, color: '#667eea', fontWeight: 600 }}>
+                    已开启链上记录：将在区块链中记录。
+                  </span>
+                )}
+              </p>
+              <div className="form-group">
+                <label>取消原因 *</label>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 10 }}>
+                  {CANCEL_WARNING_REASON_PRESETS.map((text) => (
+                    <button
+                      key={text}
+                      type="button"
+                      className="btn-secondary btn-small"
+                      onClick={() => {
+                        setCancelReason(text)
+                        setCancelSubmitError('')
+                      }}
+                    >
+                      {text}
+                    </button>
+                  ))}
+                </div>
+                <textarea
+                  className="warning-textarea"
+                  value={cancelReason}
+                  onChange={(e) => {
+                    setCancelReason(e.target.value)
+                    if (cancelSubmitError) setCancelSubmitError('')
+                  }}
+                  required
+                  rows={3}
+                  placeholder="默认已填入「已经通过补考」，可点击上方快捷原因或自行修改"
+                />
+              </div>
+              {cancelSubmitError && <div className="alert-error">{cancelSubmitError}</div>}
+              <div className="modal-actions">
+                <button type="button" className="btn-secondary" onClick={closeCancelWarningModal}>
+                  关闭
+                </button>
+                <button type="submit" className="btn-delete" disabled={cancelChainBusy}>
+                  {cancelChainBusy ? '等待 交易执行…' : '确认取消预警'}
                 </button>
               </div>
             </form>
