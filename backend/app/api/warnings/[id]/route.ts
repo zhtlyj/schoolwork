@@ -68,7 +68,7 @@ export async function PUT(
     await connectDB()
 
     const body = await request.json()
-    const { type, level, course, message, blockHash, isRead } = body
+    const { type, level, course, message, blockHash, isRead, studentAckTxHash } = body
 
     const warning = await Warning.findById(params.id)
 
@@ -81,13 +81,24 @@ export async function PUT(
       return NextResponse.json({ message: '未提供认证 token' }, { status: 401 })
     }
 
-    // 学生：只允许把自己的预警标记已读/未读；不允许改其他字段
+    // 学生：标记已读/未读；或提交链上确认交易哈希（logWarningTrace 后回写）
     if (decoded.role === 'student') {
       if (warning.studentId !== decoded.userId) {
         return NextResponse.json({ message: '无权限操作该预警' }, { status: 403 })
       }
+      const ack = typeof studentAckTxHash === 'string' ? studentAckTxHash.trim() : ''
+      if (ack) {
+        if (warning.studentAckTxHash) {
+          return NextResponse.json({ message: '该预警已链上确认过' }, { status: 400 })
+        }
+        warning.studentAckTxHash = ack
+        warning.acknowledgedAt = new Date()
+        warning.isRead = true
+        await warning.save()
+        return NextResponse.json({ message: '已记录链上确认', warning })
+      }
       if (isRead === undefined) {
-        return NextResponse.json({ message: '学生仅允许更新已读状态' }, { status: 400 })
+        return NextResponse.json({ message: '学生仅允许更新已读状态或提交链上确认哈希' }, { status: 400 })
       }
       warning.isRead = isRead
       await warning.save()

@@ -14,6 +14,9 @@ export interface Warning {
   createdBy: string
   createdByName: string
   blockHash?: string
+  /** 学生链上确认（logWarningTrace）交易哈希 */
+  studentAckTxHash?: string
+  acknowledgedAt?: string
   isRead: boolean
   createdAt: string
   updatedAt: string
@@ -53,6 +56,8 @@ export interface UpdateWarningData {
   message?: string
   blockHash?: string
   isRead?: boolean
+  /** 学生链上确认后回写 */
+  studentAckTxHash?: string
 }
 
 export interface WarningCandidate {

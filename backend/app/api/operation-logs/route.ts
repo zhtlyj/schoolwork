@@ -14,7 +14,7 @@ export async function OPTIONS() {
   })
 }
 
-// 获取操作日志（仅 staff/admin）
+// 获取操作日志（仅管理员，用于系统设置-权限管理）
 export async function GET(request: Request) {
   try {
     await connectDB()
@@ -25,8 +25,8 @@ export async function GET(request: Request) {
       return NextResponse.json({ message: '未提供认证 token' }, { status: 401 })
     }
     const decoded = verifyToken(token)
-    if (decoded.role !== 'staff' && decoded.role !== 'admin') {
-      return NextResponse.json({ message: '无权限：仅教职工/管理员可查看操作日志' }, { status: 403 })
+    if (decoded.role !== 'admin') {
+      return NextResponse.json({ message: '无权限：仅管理员可查看操作日志' }, { status: 403 })
     }
 
     const { searchParams } = new URL(request.url)

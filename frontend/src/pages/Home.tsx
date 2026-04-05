@@ -15,6 +15,7 @@ import { ACADEMIC_INTEGRITY_ANCHOR_ADDRESS } from '../contracts/academicIntegrit
 import { TARGET_CHAIN_ID } from '../contexts/WalletContext'
 import WalletBar from '../components/WalletBar'
 import ChainTransactionHistory from '../components/ChainTransactionHistory'
+import StudentLearningSuggestions from '../components/StudentLearningSuggestions'
 import { verifyContractCodeOnChain } from '../services/blockchainContract'
 import './Home.css'
 
@@ -99,9 +100,9 @@ export default function Home() {
     }
   }, [user])
 
-  // 获取操作日志（权限管理内，进入时拉取 + 每8秒轮询实现实时同步）
+  // 获取操作日志（系统设置-权限管理内，仅管理员）
   const fetchOperationLogs = useCallback(async () => {
-    if (user?.role !== 'staff' && user?.role !== 'admin') return
+    if (user?.role !== 'admin') return
     setOperationLogsLoading(true)
     try {
       const res = await operationLogService.getLogs({ limit: 50 })
@@ -114,12 +115,20 @@ export default function Home() {
   }, [user?.role])
 
   useEffect(() => {
-    if (activeNav === 'settings' && settingsTab === 'permission' && (user?.role === 'staff' || user?.role === 'admin')) {
+    if (activeNav === 'settings' && settingsTab === 'permission' && user?.role === 'admin') {
       fetchOperationLogs()
       const timer = setInterval(fetchOperationLogs, 8000)
       return () => clearInterval(timer)
     }
   }, [activeNav, settingsTab, user?.role, fetchOperationLogs])
+
+  // 教职工不可访问系统设置：若当前停留在该页则回到仪表板
+  useEffect(() => {
+    if (user?.role === 'staff' && activeNav === 'settings') {
+      setActiveNav('dashboard')
+      setActiveTab('overview')
+    }
+  }, [user?.role, activeNav])
 
   const handleLogout = () => {
     logout()
@@ -241,13 +250,16 @@ export default function Home() {
                   <span className="nav-icon">📜</span>
                   交易历史
                 </button>
-                <button
-                  className={`nav-item ${activeNav === 'settings' ? 'active' : ''}`}
-                  onClick={() => setActiveNav('settings')}
-                >
-                  <span className="nav-icon">⚙️</span>
-                  系统设置
-                </button>
+                {user?.role === 'admin' && (
+                  <button
+                    type="button"
+                    className={`nav-item ${activeNav === 'settings' ? 'active' : ''}`}
+                    onClick={() => setActiveNav('settings')}
+                  >
+                    <span className="nav-icon">⚙️</span>
+                    系统设置
+                  </button>
+                )}
               </>
             )}
           </nav>
@@ -385,19 +397,10 @@ export default function Home() {
                   </ul>
                 </div>
                 {user?.role === 'student' && (
-                  <div className="section-card">
-                    <h2>学习建议</h2>
-                    <div className="suggestion-list">
-                      <div className="suggestion-item">
-                        <span className="suggestion-icon">📚</span>
-                        <span>建议加强高等数学的学习，可申请一对一辅导</span>
-                      </div>
-                      <div className="suggestion-item">
-                        <span className="suggestion-icon">⏰</span>
-                        <span>注意出勤率，确保按时参加课程</span>
-                      </div>
-                    </div>
-                  </div>
+                  <StudentLearningSuggestions
+                    warnings={warnings}
+                    warningsLoading={warningsLoading}
+                  />
                 )}
               </div>
             )}
@@ -412,11 +415,21 @@ export default function Home() {
             {activeNav === 'warnings' && user?.role === 'student' && (
               <div className="page-content">
                 <h2 className="page-title">⚠️ 我的预警</h2>
-                <WarningList typeFilter={warningTypeFilter} onTypeFilterChange={setWarningTypeFilter} showFilters />
+                <WarningList
+                  typeFilter={warningTypeFilter}
+                  onTypeFilterChange={setWarningTypeFilter}
+                  showFilters
+                  showStudentAck
+                />
               </div>
             )}
             {activeNav === 'dashboard' && activeTab === 'warnings' && (
-              <WarningList typeFilter={warningTypeFilter} onTypeFilterChange={setWarningTypeFilter} showFilters />
+              <WarningList
+                typeFilter={warningTypeFilter}
+                onTypeFilterChange={setWarningTypeFilter}
+                showFilters
+                showStudentAck={user?.role === 'student'}
+              />
             )}
 
             {activeNav === 'interventions' && (user?.role === 'staff' || user?.role === 'admin') && (
@@ -442,7 +455,7 @@ export default function Home() {
               <StatisticsDashboard />
             )}
 
-            {(user?.role === 'staff' || user?.role === 'admin') && activeNav === 'settings' && (
+            {user?.role === 'admin' && activeNav === 'settings' && (
               <div className="page-content">
                 <h2 className="page-title">⚙️ 系统设置</h2>
                 
@@ -796,10 +809,14 @@ export default function Home() {
                         </div>
 
                         <div className="form-group">
-                          <label>前端环境变量（Vite）</label>
+                          <label>合约地址（优先 .env，否则 academicIntegrityAnchor.ts 内 FALLBACK）</label>
                           <p className="form-hint" style={{ wordBreak: 'break-all' }}>
-                            VITE_ACADEMIC_INTEGRITY_ANCHOR_ADDRESS：
+                            当前生效：
                             {ACADEMIC_INTEGRITY_ANCHOR_ADDRESS || '未配置'}
+                            {ACADEMIC_INTEGRITY_ANCHOR_ADDRESS &&
+                              ((import.meta.env.VITE_ACADEMIC_INTEGRITY_ANCHOR_ADDRESS ?? '').trim()
+                                ? '（来自 VITE_ACADEMIC_INTEGRITY_ANCHOR_ADDRESS）'
+                                : '（来自 FALLBACK_ACADEMIC_INTEGRITY_ANCHOR_ADDRESS）')}
                           </p>
                           <p className="form-hint">
                             目标链 VITE_CHAIN_ID：{TARGET_CHAIN_ID.toString()}（Sepolia 为 11155111，本地 Hardhat 为 31337）

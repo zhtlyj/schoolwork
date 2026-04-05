@@ -18,6 +18,14 @@ export function computeWarningCancelPayloadHash(warningMongoId: string, reason: 
   )
 }
 
+/** 学生确认知晓：与 logWarningTrace 的 stepHash 对应 */
+export function computeWarningAckStepHash(warningMongoId: string, timestampIso: string): string {
+  return solidityPackedKeccak256(
+    ['string', 'string', 'string'],
+    ['ack:', warningMongoId, timestampIso.trim()]
+  )
+}
+
 /**
  * 与链下约定：对快照字段做 packed keccak，顺序与字段必须固定以便核验。
  */
@@ -150,6 +158,29 @@ export async function logWarningCancellationOnChain(
     throw new Error('链上交易失败或未打包')
   }
   await appendChainTxRecord(receipt, { action: '预警取消链上记录（logWarningCancellation）' })
+  return receipt.hash
+}
+
+/**
+ * 学生端「已阅读并知晓」：调用 logWarningTrace，需 MetaMask 签名。
+ */
+export async function logWarningTraceOnChain(warningMongoId: string, stepHash: string): Promise<string> {
+  if (!window.ethereum) {
+    throw new Error('未检测到 MetaMask 等钱包，请先连接')
+  }
+  const provider = new BrowserProvider(window.ethereum)
+  const network = await provider.getNetwork()
+  if (network.chainId !== TARGET_CHAIN_ID) {
+    throw new Error(`请先在钱包中切换到目标网络（chainId=${TARGET_CHAIN_ID.toString()}）`)
+  }
+  const contract = await getAcademicIntegrityWithSigner()
+  const recordKey = computeWarningRecordKey(warningMongoId)
+  const tx = await contract.logWarningTrace(recordKey, stepHash)
+  const receipt = await tx.wait()
+  if (!receipt || receipt.status !== 1) {
+    throw new Error('链上交易失败或未打包')
+  }
+  await appendChainTxRecord(receipt, { action: '学生确认预警（logWarningTrace）' })
   return receipt.hash
 }
 

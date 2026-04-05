@@ -55,6 +55,14 @@ contract AcademicIntegrityAnchor {
         uint64 ts
     );
 
+    /// @notice 学生确认知晓、阅读等审计步骤（不要求该预警曾 anchorWarning，与 logInterventionTrace 对称）
+    event WarningAuditStep(
+        bytes32 indexed recordKey,
+        bytes32 stepHash,
+        address indexed submitter,
+        uint64 ts
+    );
+
     error AlreadyAnchored();
     error InterventionNotAnchored();
 
@@ -94,5 +102,12 @@ contract AcademicIntegrityAnchor {
      */
     function logWarningCancellation(bytes32 recordKey, bytes32 payloadHash) external {
         emit WarningCancellationLogged(recordKey, payloadHash, msg.sender, uint64(block.timestamp));
+    }
+
+    /**
+     * @notice 预警链上留痕（如学生「已阅读并知晓」），仅发出审计事件。
+     */
+    function logWarningTrace(bytes32 recordKey, bytes32 stepHash) external {
+        emit WarningAuditStep(recordKey, stepHash, msg.sender, uint64(block.timestamp));
     }
 }

@@ -19,6 +19,14 @@ async function main() {
 
   const address = await anchor.getAddress();
   console.log("AcademicIntegrityAnchor 合约地址:", address);
+
+  const net = await hre.ethers.provider.getNetwork();
+  if (net.chainId !== 11155111n) {
+    console.log(
+      `\n提示：当前 chainId=${net.chainId}（非 Sepolia）。内置/本地网络仅用于开发验证。\n` +
+        "上 Sepolia：配置 .env 中 SEPOLIA_PRIVATE_KEY 后执行 npm run deploy:sepolia\n"
+    );
+  }
 }
 
 main().catch((error) => {

@@ -78,6 +78,17 @@ export function computeInterventionReviewStepHash(
   )
 }
 
+/** 学生提交审核：与链上 appendInterventionAudit / logInterventionTrace 的 stepHash 一致 */
+export function computeInterventionStudentSubmitStepHash(
+  interventionMongoId: string,
+  notes: string
+): string {
+  return solidityPackedKeccak256(
+    ['string', 'string', 'string'],
+    ['submit:', interventionMongoId, notes.trim()]
+  )
+}
+
 export function computeInterventionRevokeStepHash(interventionMongoId: string, reason: string): string {
   return solidityPackedKeccak256(
     ['string', 'string', 'string'],

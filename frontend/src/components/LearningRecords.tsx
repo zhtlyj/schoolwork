@@ -7,6 +7,19 @@ import {
   canonicalInterventionStatusClient,
   interventionStatusLabel,
 } from '../services/interventions'
+import {
+  appendOrTraceInterventionStepOnChain,
+  computeInterventionStudentSubmitStepHash,
+  explorerTxUrl,
+} from '../services/interventionChain'
+import { useWallet } from '../contexts/WalletContext'
+import { downloadCsv, formatExportDate } from '../lib/exportCsv'
+import {
+  buildAttendanceCsv,
+  buildFullLearningRecordsCsv,
+  buildGradesCsv,
+  buildInterventionsCsv,
+} from '../lib/learningRecordsExport'
 import '../pages/Home.css'
 
 /**
@@ -14,6 +27,7 @@ import '../pages/Home.css'
  * 整合展示学生的出勤记录、成绩记录和干预记录
  */
 export default function LearningRecords() {
+  const { ensureTargetChain, connect } = useWallet()
   const [activeTab, setActiveTab] = useState<'attendance' | 'grades' | 'interventions'>('attendance')
 
   // 出勤记录
@@ -31,6 +45,7 @@ export default function LearningRecords() {
   const [interventionsLoading, setInterventionsLoading] = useState(false)
   const [interventionsError, setInterventionsError] = useState('')
   const [interventionSubmittingId, setInterventionSubmittingId] = useState<string | null>(null)
+  const [exporting, setExporting] = useState(false)
 
   // 获取出勤记录
   const fetchAttendance = async () => {
@@ -166,16 +181,101 @@ export default function LearningRecords() {
     setInterventionsError('')
     setInterventionSubmittingId(intervention._id)
     try {
+      const eth = window.ethereum
+      if (!eth) {
+        setInterventionsError('未检测到钱包，请安装 MetaMask 等扩展')
+        return
+      }
+      const accs = (await eth.request({ method: 'eth_accounts' })) as string[]
+      if (!accs?.length) {
+        await connect()
+      }
+      const accs2 = (await eth.request({ method: 'eth_accounts' })) as string[]
+      if (!accs2?.length) {
+        setInterventionsError('请先连接钱包后再提交审核（需用 MetaMask 确认链上交易）')
+        return
+      }
+      await ensureTargetChain()
+
+      const stepHash = computeInterventionStudentSubmitStepHash(intervention._id, text)
+      const txHash = await appendOrTraceInterventionStepOnChain(intervention._id, stepHash, {
+        action: '学生提交审核（链上审计）',
+      })
+
       await interventionService.updateIntervention(intervention._id, {
         notes: text,
         submitForReview: true,
+        blockHash: txHash,
       })
       const res = await interventionService.getInterventions({ page: 1, limit: 100 })
       setInterventions(res.interventions)
     } catch (err: any) {
-      setInterventionsError(err.response?.data?.message || '提交失败')
+      const msg =
+        err?.response?.data?.message ||
+        (err instanceof Error ? err.message : String(err)) ||
+        '提交失败'
+      setInterventionsError(msg)
     } finally {
       setInterventionSubmittingId(null)
+    }
+  }
+
+  /** 导出当前标签（拉取最新数据后生成 CSV，Excel 可直接打开） */
+  const handleExportCurrentTab = async () => {
+    setExporting(true)
+    try {
+      if (activeTab === 'attendance') {
+        const res = await attendanceService.getAttendance({ page: 1, limit: 500 })
+        setAttendanceRecords(res.records)
+        if (!res.records.length) {
+          window.alert('暂无出勤数据可导出')
+          return
+        }
+        downloadCsv(`学习记录_出勤_${formatExportDate()}.csv`, buildAttendanceCsv(res.records))
+        return
+      }
+      if (activeTab === 'grades') {
+        const res = await gradeService.getGrades({ page: 1, limit: 500 })
+        setGrades(res.grades)
+        if (!res.grades.length) {
+          window.alert('暂无成绩数据可导出')
+          return
+        }
+        downloadCsv(`学习记录_成绩_${formatExportDate()}.csv`, buildGradesCsv(res.grades))
+        return
+      }
+      const res = await interventionService.getInterventions({ page: 1, limit: 500 })
+      setInterventions(res.interventions)
+      if (!res.interventions.length) {
+        window.alert('暂无干预数据可导出')
+        return
+      }
+      downloadCsv(`学习记录_干预_${formatExportDate()}.csv`, buildInterventionsCsv(res.interventions))
+    } catch (e: unknown) {
+      window.alert(e instanceof Error ? e.message : '导出失败')
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  /** 导出全部：出勤 + 成绩 + 干预 合并为一个 CSV */
+  const handleExportAll = async () => {
+    setExporting(true)
+    try {
+      const [attRes, gradeRes, ivRes] = await Promise.all([
+        attendanceService.getAttendance({ page: 1, limit: 500 }),
+        gradeService.getGrades({ page: 1, limit: 500 }),
+        interventionService.getInterventions({ page: 1, limit: 500 }),
+      ])
+      setAttendanceRecords(attRes.records)
+      setGrades(gradeRes.grades)
+      setInterventions(ivRes.interventions)
+      const csv = buildFullLearningRecordsCsv(attRes.records, gradeRes.grades, ivRes.interventions)
+      downloadCsv(`学习记录_全部_${formatExportDate()}.csv`, csv)
+    } catch (e: unknown) {
+      window.alert(e instanceof Error ? e.message : '导出失败')
+    } finally {
+      setExporting(false)
     }
   }
 
@@ -196,6 +296,28 @@ export default function LearningRecords() {
   return (
     <div className="page-content">
       <h2 className="page-title">📚 学习记录</h2>
+
+      <div className="learning-records-export-bar">
+        <button
+          type="button"
+          className="btn-secondary btn-small"
+          disabled={exporting}
+          onClick={() => void handleExportCurrentTab()}
+        >
+          {exporting ? '导出中…' : '📥 导出当前标签为表格（CSV）'}
+        </button>
+        <button
+          type="button"
+          className="btn-primary btn-small"
+          disabled={exporting}
+          onClick={() => void handleExportAll()}
+        >
+          {exporting ? '导出中…' : '📥 导出全部学习记录（CSV）'}
+        </button>
+        <p className="export-hint">
+          CSV 可用 Excel、WPS 打开；含 UTF-8 标记，中文不乱码。当前标签指出勤 / 成绩 / 干预中正在查看的那一类。
+        </p>
+      </div>
 
       {/* 统计卡片 */}
       <div className="records-stats">
@@ -427,6 +549,9 @@ export default function LearningRecords() {
                           <label style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>
                             完成情况说明（提交后进入待审核）
                           </label>
+                          <p className="form-hint" style={{ marginBottom: 8 }}>
+                            提交时将弹出 MetaMask：先在链上写入审计记录，再保存到系统。请连接钱包并切换到与系统一致的测试网。
+                          </p>
                           <textarea
                             className="warning-textarea"
                             style={{ width: '100%', minHeight: 72 }}
@@ -454,9 +579,20 @@ export default function LearningRecords() {
                       <span className="intervention-time">
                         {new Date(intervention.createdAt).toLocaleDateString('zh-CN')}
                       </span>
-                      {intervention.blockHash && (
-                        <span className="blockchain-badge">⛓️ 已上链</span>
-                      )}
+                      {intervention.blockHash &&
+                        (explorerTxUrl(intervention.blockHash) ? (
+                          <a
+                            href={explorerTxUrl(intervention.blockHash)!}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="blockchain-badge"
+                            style={{ textDecoration: 'none' }}
+                          >
+                            ⛓️ 查看链上交易
+                          </a>
+                        ) : (
+                          <span className="blockchain-badge">⛓️ 已上链</span>
+                        ))}
                     </div>
                   </div>
                 )

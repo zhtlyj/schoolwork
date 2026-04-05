@@ -8,6 +8,7 @@
     "test": "hardhat test",
     "clean": "hardhat clean",
     "node": "hardhat node",
+    "deploy": "hardhat run scripts/deploy.ts --network hardhat",
     "deploy:localhost": "hardhat run scripts/deploy.ts --network localhost",
     "deploy:sepolia": "hardhat run scripts/deploy.ts --network sepolia"
   },

@@ -12,6 +12,8 @@ interface WarningListProps {
   onTypeFilterChange?: (v: '' | 'grade' | 'credit_semester' | 'credit_total') => void
   /** 是否显示完整筛选项（公用+各自子筛选项） */
   showFilters?: boolean
+  /** 学生端：预警卡片上展示「确认知晓」链上交互 */
+  showStudentAck?: boolean
 }
 
 /**
@@ -26,6 +28,7 @@ export default function WarningList({
   typeFilter = '',
   onTypeFilterChange,
   showFilters = true,
+  showStudentAck = false,
 }: WarningListProps) {
   const [warnings, setWarnings] = useState<Warning[]>([])
   const [loading, setLoading] = useState(true)
@@ -198,7 +201,12 @@ export default function WarningList({
         <>
           <div className="warnings-section">
             {paginatedWarnings.map((warning) => (
-              <WarningCard key={warning._id} warning={warning} />
+              <WarningCard
+                key={warning._id}
+                warning={warning}
+                interactive={showStudentAck}
+                onAcknowledged={fetchWarnings}
+              />
             ))}
           </div>
           {totalPages > 1 && (

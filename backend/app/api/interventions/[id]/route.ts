@@ -113,6 +113,9 @@ export async function PUT(request: Request, { params }: { params: { id: string }
         intervention.notes = completion
         intervention.status = 'pending_review'
         intervention.submittedAt = new Date()
+        if (typeof blockHash === 'string' && blockHash.trim()) {
+          intervention.blockHash = blockHash.trim()
+        }
         await intervention.save()
         const plain = intervention.toObject()
         return NextResponse.json({ message: '已提交审核', intervention: serializeIntervention(plain) })

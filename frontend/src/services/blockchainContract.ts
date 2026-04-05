@@ -31,7 +31,10 @@ export async function verifyContractCodeOnChain(): Promise<{
 }> {
   const addr = ACADEMIC_INTEGRITY_ANCHOR_ADDRESS.trim()
   if (!addr) {
-    return { ok: false, message: '未配置 VITE_ACADEMIC_INTEGRITY_ANCHOR_ADDRESS' }
+    return {
+      ok: false,
+      message: '未配置合约地址（请设置 VITE_ACADEMIC_INTEGRITY_ANCHOR_ADDRESS 或 academicIntegrityAnchor.ts 内 FALLBACK）',
+    }
   }
   if (!window.ethereum) {
     return { ok: false, message: '未检测到钱包，无法查询链上代码' }

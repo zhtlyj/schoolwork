@@ -10,6 +10,10 @@ export interface IWarning extends Document {
   createdBy: string // 创建者ID（教职工或管理员）
   createdByName: string // 创建者姓名
   blockHash?: string // 区块链哈希
+  /** 学生「已知晓」链上交易哈希（logWarningTrace） */
+  studentAckTxHash?: string
+  /** 学生链上确认时间 */
+  acknowledgedAt?: Date
   isRead: boolean // 是否已读
   createdAt: Date
   updatedAt: Date
@@ -58,6 +62,13 @@ const WarningSchema = new Schema<IWarning>(
     blockHash: {
       type: String,
       trim: true,
+    },
+    studentAckTxHash: {
+      type: String,
+      trim: true,
+    },
+    acknowledgedAt: {
+      type: Date,
     },
     isRead: {
       type: Boolean,

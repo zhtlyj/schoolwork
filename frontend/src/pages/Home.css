@@ -1676,6 +1676,11 @@
   z-index: 100;
 }
 
+/* 干预管理学生筛选：列表较长时加大可视高度 */
+.student-search-filter .student-search-dropdown.student-search-dropdown--tall {
+  max-height: min(320px, 55vh);
+}
+
 .student-search-filter .student-search-option {
   padding: 10px 12px;
   font-size: 14px;
@@ -2577,6 +2582,25 @@
 .records-tab-btn.active {
   color: #667eea;
   border-bottom-color: #667eea;
+}
+
+.learning-records-export-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-bottom: 16px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.55);
+  border-radius: 10px;
+  border: 1px solid rgba(102, 126, 234, 0.2);
+}
+
+.learning-records-export-bar .export-hint {
+  font-size: 12px;
+  color: #666;
+  width: 100%;
+  margin: 0;
 }
 
 .records-tab-content {

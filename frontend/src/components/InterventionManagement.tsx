@@ -215,6 +215,10 @@ export default function InterventionManagement({ interventionTypes }: Interventi
   const [reviewOpinion, setReviewOpinion] = useState('')
   const [detailActionLoading, setDetailActionLoading] = useState(false)
 
+  /** 学生筛选项：可搜索的下拉 */
+  const [studentFilterDropdownOpen, setStudentFilterDropdownOpen] = useState(false)
+  const [studentFilterSearchInput, setStudentFilterSearchInput] = useState('')
+
   useEffect(() => {
     if (!success) return
     const t = setTimeout(() => setSuccess(''), 1000)
@@ -323,6 +327,8 @@ export default function InterventionManagement({ interventionTypes }: Interventi
 
   const resetFilters = () => {
     setFilters({ studentId: '', status: '', type: '' })
+    setStudentFilterSearchInput('')
+    setStudentFilterDropdownOpen(false)
     setPage(1)
   }
 
@@ -636,22 +642,89 @@ export default function InterventionManagement({ interventionTypes }: Interventi
       {listError && <div className="alert-error">{listError}</div>}
 
       <div className="warning-filters">
-        <div className="filter-item">
+        <div className="filter-item student-search-filter">
           <label>学生</label>
-          <select
-            value={filters.studentId}
-            onChange={(e) => {
-              setPage(1)
-              setFilters((p) => ({ ...p, studentId: e.target.value }))
-            }}
-          >
-            <option value="">全部学生</option>
-            {students.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}（{s.studentId}）
-              </option>
-            ))}
-          </select>
+          <div className="student-search-wrapper">
+            <input
+              type="text"
+              className="student-search-input"
+              placeholder="输入姓名或学号筛选"
+              autoComplete="off"
+              value={
+                studentFilterDropdownOpen
+                  ? studentFilterSearchInput
+                  : filters.studentId
+                    ? (() => {
+                        const s = students.find((x) => x.id === filters.studentId)
+                        return s ? `${s.name}（${s.studentId}）` : ''
+                      })()
+                    : ''
+              }
+              onChange={(e) => {
+                setStudentFilterSearchInput(e.target.value)
+                setStudentFilterDropdownOpen(true)
+                if (!e.target.value.trim()) {
+                  setPage(1)
+                  setFilters((p) => ({ ...p, studentId: '' }))
+                }
+              }}
+              onFocus={() => {
+                setStudentFilterDropdownOpen(true)
+                if (filters.studentId) setStudentFilterSearchInput('')
+              }}
+              onBlur={() => setTimeout(() => setStudentFilterDropdownOpen(false), 150)}
+            />
+            {studentFilterDropdownOpen && (
+              <div className="student-search-dropdown student-search-dropdown--tall">
+                <div
+                  role="option"
+                  className="student-search-option"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => {
+                    setPage(1)
+                    setFilters((p) => ({ ...p, studentId: '' }))
+                    setStudentFilterSearchInput('')
+                    setStudentFilterDropdownOpen(false)
+                  }}
+                >
+                  全部学生
+                </div>
+                {students
+                  .filter((s) => {
+                    const q = studentFilterSearchInput.trim().toLowerCase()
+                    if (!q) return true
+                    return (
+                      s.name.toLowerCase().includes(q) || s.studentId.toLowerCase().includes(q)
+                    )
+                  })
+                  .map((s) => (
+                    <div
+                      key={s.id}
+                      role="option"
+                      className="student-search-option"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => {
+                        setPage(1)
+                        setFilters((p) => ({ ...p, studentId: s.id }))
+                        setStudentFilterSearchInput('')
+                        setStudentFilterDropdownOpen(false)
+                      }}
+                    >
+                      {s.name}（{s.studentId}）
+                    </div>
+                  ))}
+                {studentFilterSearchInput.trim() &&
+                  students.filter((s) => {
+                    const q = studentFilterSearchInput.trim().toLowerCase()
+                    return (
+                      s.name.toLowerCase().includes(q) || s.studentId.toLowerCase().includes(q)
+                    )
+                  }).length === 0 && (
+                    <div className="student-search-option student-search-empty">无匹配学生</div>
+                  )}
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="filter-item">
